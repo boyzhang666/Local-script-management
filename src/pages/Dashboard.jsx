@@ -151,7 +151,9 @@ export default function Dashboard() {
   const cancelGuardianFor = (id) => {
     const t = guardianTimersRef.current.get(id);
     if (t) {
+      // 同时兼容清理 setTimeout / setInterval
       clearTimeout(t);
+      clearInterval(t);
       guardianTimersRef.current.delete(id);
     }
     guardianActiveIdsRef.current.delete(id);
@@ -233,6 +235,13 @@ export default function Dashboard() {
     if (editingProject) {
       updateMutation.mutate({ id: editingProject.id, data });
     } else {
+      // 新建任务时端口号必填且需合法
+      const port = data?.port;
+      const valid = Number.isInteger(port) && port >= 1 && port <= 65535;
+      if (!valid) {
+        toast({ title: '端口号必填', description: '请填写 1-65535 的有效端口号', variant: 'destructive', duration: 2500 });
+        return;
+      }
       createMutation.mutate(data);
     }
   };
@@ -471,6 +480,70 @@ export default function Dashboard() {
     const candidates = projects.filter(p => p.auto_restart && p.was_running_before_shutdown && !p.manual_stopped && p.status !== 'running');
     for (const p of candidates) {
       runGuardian(p.id);
+    }
+  }, [projects]);
+
+  // 在组件卸载时清理所有守护定时器，避免内存泄漏
+  useEffect(() => {
+    return () => {
+      for (const id of Array.from(guardianTimersRef.current.keys())) {
+        cancelGuardianFor(id);
+      }
+    };
+  }, []);
+
+  // 通用守护监控：当选中了守护进程（auto_restart）的任务时，按间隔检查是否运行；未运行则触发守护启动
+  useEffect(() => {
+    if (!projects || projects.length === 0) return;
+
+    // 为需要守护的任务建立监控定时器
+    for (const p of projects) {
+      // 不需要守护或手动停止的任务：取消监控
+      if (!p.auto_restart || p.manual_stopped) {
+        cancelGuardianFor(p.id);
+        continue;
+      }
+
+      // 已有定时器则跳过，避免重复创建
+      if (guardianTimersRef.current.has(p.id)) continue;
+
+      const intervalSec = typeof p.restart_interval === 'number' ? p.restart_interval : 15;
+      const timer = setInterval(async () => {
+        let arr = [];
+        try { arr = listProjects(); } catch { arr = []; }
+        const latest = arr.find(x => x.id === p.id);
+        if (!latest) { cancelGuardianFor(p.id); return; }
+        if (latest.manual_stopped || !latest.auto_restart) { cancelGuardianFor(p.id); return; }
+
+        // 跳过正在启动中的任务，避免并发冲突
+        if (latest.status === 'executing') return;
+
+        // 真实运行状态检测
+        let actuallyRunning = false;
+        try {
+          if (latest.port) {
+            actuallyRunning = await checkPortReady(latest.port, 2, 500);
+          } else {
+            const status = await getProjectStatus(latest.id);
+            actuallyRunning = status?.running || false;
+          }
+        } catch { /* ignore */ }
+
+        // 未运行则触发守护流程（会自行进行启动与健康检查，并按间隔重试）
+        if (!actuallyRunning) {
+          runGuardian(latest.id);
+        }
+      }, Math.max(1, intervalSec) * 1000);
+
+      guardianTimersRef.current.set(p.id, timer);
+      guardianActiveIdsRef.current.add(p.id);
+    }
+
+    // 清理不在列表中的任务定时器
+    for (const id of Array.from(guardianTimersRef.current.keys())) {
+      if (!projects.find(p => p.id === id)) {
+        cancelGuardianFor(id);
+      }
     }
   }, [projects]);
 

@@ -182,7 +182,7 @@ export default function ProjectForm({ project, existingGroups = [], onSave, onCa
                 </div>
 
                 <div>
-                  <Label htmlFor="port">端口号</Label>
+                  <Label htmlFor="port">端口号(用于任务检查) {project ? '' : '*'} </Label>
                   <Input
                     id="port"
                     type="number"
@@ -192,6 +192,9 @@ export default function ProjectForm({ project, existingGroups = [], onSave, onCa
                       handleChange('port', val === '' ? '' : parseInt(val, 10));
                     }}
                     placeholder="3000"
+                    required={!project}
+                    min="1"
+                    max="65535"
                   />
                 </div>
 

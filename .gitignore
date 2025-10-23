@@ -1,0 +1,15 @@
+# Ignore directories
+dist/
+build/
+target/
+wheels/
+release/
+__pycache__/
+node_modules/
+
+# Ignore files
+*.log
+*.py[oc]
+*.pyc
+.env
+.DS_Store
