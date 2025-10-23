@@ -15,11 +15,19 @@ npm run dev
 ```bash
 npm run build
 ```
+
+## Deploying the app
+
+```bash
+./deploy.sh
+```
+
+
+
 ## 功能说明
 
 - 项目列表查看、搜索、筛选
 - 新建、编辑项目（名称、类型、工作目录、启动/停止命令、端口、环境变量等）
-- 启动命令拼接与复制（不会自动执行命令，仅用于辅助）
-- 使用 React Query 管理前端数据状态，数据持久化到 localStorage
-
-如需改为真实后端服务存储，可在 `src/api/localProjects.js` 的基础上替换为你的 API 调用。
+- 项目启动/停止/重启（会自动检查端口是否被占用）
+- 会在后台持续检查已添加守护进程的任务，直到手动停止
+- streamlit 项目类型，会自动在启动命令中使用 `Python -m streamlit run` 命令，若需指定 conda 环境，需使用 `conda run -n <env_name> Python -m streamlit run`
