@@ -1,7 +1,6 @@
 # Dev Deck
 
 一个用于管理本地开发项目的轻量级前端应用（Vite + React）。
-已移除 Base44 相关依赖与接口，所有数据仅在浏览器本地存储（localStorage）中保存。
 
 ## Running the app
 
