@@ -214,7 +214,7 @@ export default function ProjectForm({ project, existingGroups = [], onSave, onCa
                     id="start_command"
                     value={formData.start_command}
                     onChange={(e) => handleChange('start_command', e.target.value)}
-                    placeholder="npm start"
+                    placeholder="如: python main.py"
                     required
                     className="font-mono"
                   />
@@ -226,7 +226,7 @@ export default function ProjectForm({ project, existingGroups = [], onSave, onCa
                     id="stop_command"
                     value={formData.stop_command}
                     onChange={(e) => handleChange('stop_command', e.target.value)}
-                    placeholder="npm stop"
+                    placeholder="默认不填写"
                     className="font-mono"
                   />
                 </div>

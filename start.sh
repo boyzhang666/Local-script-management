@@ -60,8 +60,24 @@ cleanup() {
 # 设置信号处理
 trap cleanup SIGINT SIGTERM
 
-echo "🔧 启动后端服务器 (端口 3001)..."
-npm run server > logs/backend.log 2>&1 &
+pick_port() {
+  local base=${1:-3001}
+  for p in $(seq $base $((base+9))); do
+    if ! lsof -n -P -i :"$p" >/dev/null 2>&1; then
+      echo "$p"
+      return 0
+    fi
+  done
+  echo "$base"
+}
+
+API_PORT="${API_PORT:-}"
+if [[ -z "$API_PORT" ]]; then
+  API_PORT=$(pick_port 3001)
+fi
+export VITE_API_PORT="$API_PORT"
+echo "🔧 启动后端服务器 (端口 $API_PORT)..."
+PORT="$API_PORT" node server/index.js > logs/backend.log 2>&1 &
 BACKEND_PID=$!
 
 # 等待后端服务启动
@@ -94,7 +110,7 @@ echo ""
 echo "🎉 所有服务已成功启动！"
 echo "=================================="
 echo "📱 前端地址: http://localhost:5173"
-echo "🔧 后端地址: http://localhost:3001"
+echo "🔧 后端地址: http://localhost:$API_PORT"
 echo "📋 日志文件: logs/frontend.log, logs/backend.log"
 echo ""
 echo "💡 按 Ctrl+C 停止所有服务"

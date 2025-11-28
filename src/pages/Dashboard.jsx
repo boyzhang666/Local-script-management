@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { listProjects, createProject, updateProject, deleteProject } from "@/api/localProjects";
-import { startProject as startProcess, stopProject as stopProcess, getProjectStatus, getProjectLogs } from "@/api/processControl";
-import { toast } from "@/components/ui/use-toast";
+import { startProject as startProcess, stopProject as stopProcess, getProjectStatus, getProjectLogs, searchProcessesByName, listProcessesByPort, killProcess } from "@/api/processControl";
+import { showSuccess, showError, showInfo, MESSAGES } from "@/utils/notification";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,6 +17,17 @@ import {
 
 import ProjectCard from "../components/projects/ProjectCard";
 import ProjectForm from "../components/projects/ProjectForm";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 export default function Dashboard() {
   const [showForm, setShowForm] = useState(false);
@@ -27,13 +38,22 @@ export default function Dashboard() {
   const [viewMode, setViewMode] = useState("grid");
   const [groupBy, setGroupBy] = useState("none"); // none | group
   const [sortOption, setSortOption] = useState("name_asc"); // updated_desc | updated_asc | name_asc | name_desc | status | group_name
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [projectToDelete, setProjectToDelete] = useState(null);
+  const [procQueryOpen, setProcQueryOpen] = useState(false);
+  const [portQueryOpen, setPortQueryOpen] = useState(false);
+  const [procQueryName, setProcQueryName] = useState("");
+  const [portQueryValue, setPortQueryValue] = useState("");
+  const [procResults, setProcResults] = useState([]);
+  const [portResults, setPortResults] = useState([]);
+  const [procLoading, setProcLoading] = useState(false);
+  const [portLoading, setPortLoading] = useState(false);
   // 顶部反馈卡片不再使用，改为右侧 Toast 自动消失
   
   const queryClient = useQueryClient();
-  const notifiedMaxIdsRef = useRef(new Set());
-  const bootGuardRanRef = useRef(false); // 本次应用会话是否已运行过“系统重启后的守护流程”
-  const guardianTimersRef = useRef(new Map()); // 记录守护定时器：id -> timer
-  const guardianActiveIdsRef = useRef(new Set()); // 会话内被守护的任务记录
+  const syncedOnceRef = useRef(false); // 首次进入页面时的状态同步
+  const [runtimeStatus, setRuntimeStatus] = useState({});
+  const [runtimePid, setRuntimePid] = useState({});
 
   const { data: projects = [] } = useQuery({
     queryKey: ['projects'],
@@ -41,53 +61,104 @@ export default function Dashboard() {
     initialData: [],
   });
 
-  // 自愈：若有任务卡在 executing，自动核对后端状态并修正
+  // 渲染时从后端同步运行时状态，仅用于显示
   useEffect(() => {
-    const needCheck = projects.some(p => p.status === 'executing');
-    if (!needCheck) return;
     (async () => {
-      for (const p of projects) {
-        if (p.status !== 'executing') continue;
-        try {
-          const status = await getProjectStatus(p.id);
-          if (status?.running) {
-            updateMutation.mutate({ id: p.id, data: { status: 'running' } });
-          } else {
-            updateMutation.mutate({ id: p.id, data: { status: 'error' } });
-            toast({ title: '启动异常', description: `任务「${p.name || p.id}」状态已校正为错误`, duration: 2500 });
-          }
-        } catch {
-          // 查询失败时，标记为错误以避免长时间停留在执行中
-          updateMutation.mutate({ id: p.id, data: { status: 'error' } });
-        }
+      if (!projects || projects.length === 0) {
+        setRuntimeStatus({});
+        setRuntimePid({});
+        return;
       }
+      try {
+        const entries = await Promise.all(
+          projects.map(p => getProjectStatus(p.id)
+            .then(s => [p.id, s])
+            .catch(() => [p.id, null]))
+        );
+        const statusMap = {};
+        const pidMap = {};
+        for (const [id, s] of entries) {
+          const running = s && s.running;
+          statusMap[id] = running ? 'running' : 'stopped';
+          pidMap[id] = s && s.pid ? s.pid : null;
+        }
+        setRuntimeStatus(statusMap);
+        setRuntimePid(pidMap);
+      } catch { /* ignore */ }
     })();
   }, [projects]);
+
+  // 每 5 秒轮询运行状态，所有显示状态都来自后端
+  useEffect(() => {
+    const fetchStatuses = async () => {
+      if (!projects || projects.length === 0) {
+        setRuntimeStatus({});
+        setRuntimePid({});
+        return;
+      }
+      try {
+        const entries = await Promise.all(
+          projects.map(p => getProjectStatus(p.id)
+            .then(s => [p.id, s])
+            .catch(() => [p.id, null]))
+        );
+        const nextStatus = {};
+        const nextPid = {};
+        for (const [id, s] of entries) {
+          const running = s && s.running;
+          nextStatus[id] = running ? 'running' : 'stopped';
+          nextPid[id] = s && s.pid ? s.pid : null;
+        }
+        const prevStatus = runtimeStatus || {};
+        const prevPid = runtimePid || {};
+        let changed = false;
+        const keys = new Set([
+          ...Object.keys(prevStatus),
+          ...Object.keys(nextStatus),
+          ...Object.keys(prevPid),
+          ...Object.keys(nextPid),
+        ]);
+        for (const k of keys) {
+          if ((prevStatus[k] ?? '') !== (nextStatus[k] ?? '') ||
+              (prevPid[k] ?? null) !== (nextPid[k] ?? null)) {
+            changed = true;
+            break;
+          }
+        }
+        if (changed) {
+          setRuntimeStatus(nextStatus);
+          setRuntimePid(nextPid);
+        }
+      } catch { /* ignore */ }
+    };
+    const timer = setInterval(fetchStatuses, 5000);
+    return () => clearInterval(timer);
+  }, [projects, runtimeStatus]);
 
   // 新增：项目重启后的状态自愈机制
   useEffect(() => {
     if (!projects || projects.length === 0) return;
+    if (!syncedOnceRef.current) {
+      (async () => {
+        for (const p of projects) {
+          try {
+            const s = await getProjectStatus(p.id);
+            const newStatus = s?.running ? 'running' : 'stopped';
+            if (p.status !== newStatus) {
+              // 显示用，不写回持久化状态
+            }
+          } catch { /* ignore */ }
+        }
+        syncedOnceRef.current = true;
+      })();
+    }
     (async () => {
       for (const p of projects) {
-        if (p.status === 'running') {
-          try {
-            let isActuallyRunning = false;
-            if (p.port) {
-              isActuallyRunning = await checkPortReady(p.port, 3, 500);
-            } else {
-              const status = await getProjectStatus(p.id);
-              isActuallyRunning = status?.running || false;
-            }
-            if (!isActuallyRunning) {
-              updateMutation.mutate({ id: p.id, data: { status: 'stopped' } });
-            }
-          } catch {
-            updateMutation.mutate({ id: p.id, data: { status: 'stopped' } });
-          }
-        }
+        // 使用 runtimeStatus 来展示运行态，无需写入后端
       }
     })();
   }, [projects]);
+
   const createMutation = useMutation({
     mutationFn: (data) => createProject(data),
     onSuccess: () => {
@@ -111,26 +182,16 @@ export default function Dashboard() {
     mutationFn: (id) => deleteProject(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['projects'] });
-      toast({ title: '任务已删除', description: '该任务已从列表移除' });
+      showSuccess(MESSAGES.TASK_DELETED, '该任务已从列表移除');
     },
     onError: (error) => {
-      toast({ title: '删除失败', description: error?.message || '请稍后再试', variant: 'destructive' });
+      showError(MESSAGES.TASK_DELETE_ERROR, error?.message || '请稍后再试');
     }
   });
 
   const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-  async function checkPortReady(port, attempts = 10, intervalMs = 800, path = '/') {
-    const url = `http://127.0.0.1:${port}${path}`;
-    for (let i = 0; i < attempts; i++) {
-      try {
-        // Use no-cors so that even without CORS headers, we can detect reachability
-        await fetch(url, { method: 'GET', mode: 'no-cors' });
-        return true;
-      } catch {
-        await delay(intervalMs);
-      }
-    }
+  async function checkPortReady() {
     return false;
   }
 
@@ -147,90 +208,26 @@ export default function Dashboard() {
     return false;
   }
 
-  // 系统重启守护：辅助函数，取消某任务的定时器并移除守护记录
-  const cancelGuardianFor = (id) => {
-    const t = guardianTimersRef.current.get(id);
-    if (t) {
-      // 同时兼容清理 setTimeout / setInterval
-      clearTimeout(t);
-      clearInterval(t);
-      guardianTimersRef.current.delete(id);
+  // 立即从后端获取某个任务的最新运行态，用于操作成功后的快速同步
+  async function refreshRuntimeFor(id) {
+    if (!id) return;
+    try {
+      const status = await getProjectStatus(id);
+      const running = !!status?.running;
+      const pid = status?.pid ?? null;
+      setRuntimeStatus((prev) => ({
+        ...prev,
+        [id]: running ? 'running' : 'stopped',
+      }));
+      setRuntimePid((prev) => ({
+        ...prev,
+        [id]: pid,
+      }));
+    } catch {
+      // 忽略单次刷新失败，后续轮询会继续尝试
     }
-    guardianActiveIdsRef.current.delete(id);
-  };
+  }
 
-  // 系统重启守护：为单个任务执行按间隔重试的启动流程（仅在会话启动时触发）
-  const runGuardian = (id) => {
-    guardianActiveIdsRef.current.add(id);
-    const attempt = async () => {
-      let arr = [];
-      try { arr = listProjects(); } catch { arr = []; }
-      const p = arr.find(x => x.id === id);
-      if (!p) { cancelGuardianFor(id); return; }
-      if (p.manual_stopped || !p.auto_restart) { cancelGuardianFor(id); return; }
-      const max = typeof p.max_restarts === 'number' ? p.max_restarts : 5;
-      const intervalSec = typeof p.restart_interval === 'number' ? p.restart_interval : 15;
-      const count = typeof p.restart_count === 'number' ? p.restart_count : 0;
-
-      if (count >= max) {
-        if (!notifiedMaxIdsRef.current.has(id)) {
-          notifiedMaxIdsRef.current.add(id);
-          toast({ title: '守护已停止', description: `任务「${p.name || id}」已达到最大重启次数（${max}次）`, variant: 'destructive', duration: 3000 });
-        }
-        cancelGuardianFor(id);
-        return;
-      }
-
-      // 尝试启动（无需触发手动逻辑）
-      updateMutation.mutate({ id, data: { status: 'executing' } });
-      const startResult = await startProcess(p).catch((e) => ({ ok: false, error: String(e) }));
-      if (startResult && startResult.ok === false) {
-        const newCount = count + 1;
-        updateMutation.mutate({ id, data: { status: 'error', restart_count: newCount } });
-        if (newCount >= max) {
-          if (!notifiedMaxIdsRef.current.has(id)) {
-            notifiedMaxIdsRef.current.add(id);
-            toast({ title: '守护已停止', description: `任务「${p.name || id}」已达到最大重启次数（${max}次）`, variant: 'destructive', duration: 3000 });
-          }
-          cancelGuardianFor(id);
-        } else {
-          const t = setTimeout(attempt, Math.max(1, intervalSec) * 1000);
-          guardianTimersRef.current.set(id, t);
-        }
-        return;
-      }
-
-      // 健康检查
-      let ok = false;
-      if (p.port) {
-        ok = await checkPortReady(p.port, 10, 800);
-      } else {
-        ok = await waitForRunningStatus(id, 10, 800);
-      }
-
-      if (ok) {
-        updateMutation.mutate({ id, data: { status: 'running', restart_count: 0, manual_stopped: false, last_started: new Date().toISOString() } });
-        notifiedMaxIdsRef.current.delete(id);
-        toast({ title: '守护启动成功', description: `任务「${p.name || id}」已恢复运行`, duration: 2000 });
-        cancelGuardianFor(id);
-      } else {
-        await stopProcess(p).catch(() => {});
-        const newCount = count + 1;
-        updateMutation.mutate({ id, data: { status: 'error', restart_count: newCount } });
-        if (newCount >= max) {
-          if (!notifiedMaxIdsRef.current.has(id)) {
-            notifiedMaxIdsRef.current.add(id);
-            toast({ title: '守护已停止', description: `任务「${p.name || id}」已达到最大重启次数（${max}次）`, variant: 'destructive', duration: 3000 });
-          }
-          cancelGuardianFor(id);
-        } else {
-          const t = setTimeout(attempt, Math.max(1, intervalSec) * 1000);
-          guardianTimersRef.current.set(id, t);
-        }
-      }
-    };
-    attempt();
-  };
   const handleSave = (data) => {
     if (editingProject) {
       updateMutation.mutate({ id: editingProject.id, data });
@@ -239,7 +236,7 @@ export default function Dashboard() {
       const port = data?.port;
       const valid = Number.isInteger(port) && port >= 1 && port <= 65535;
       if (!valid) {
-        toast({ title: '端口号必填', description: '请填写 1-65535 的有效端口号', variant: 'destructive', duration: 2500 });
+        showError('端口号必填', '请填写 1-65535 的有效端口号', 2500);
         return;
       }
       createMutation.mutate(data);
@@ -248,22 +245,13 @@ export default function Dashboard() {
 
   const handleStart = async (project) => {
     try {
-      // 手动操作前，取消该任务的守护定时器
-      cancelGuardianFor(project.id);
       if (!project.start_command || !String(project.start_command).trim()) {
-        toast({ title: '无法启动', description: '请先在任务设置中填写启动命令（start_command）', duration: 3000 });
+        showError('无法启动', '请先在任务设置中填写启动命令（start_command）');
         return;
       }
-      // 立即标记为"执行中"
-      updateMutation.mutate({
-        id: project.id,
-        data: { 
-          status: 'executing', 
-          last_started: new Date().toISOString(),
-          manual_stopped: false
-        }
-      });
-      toast({ title: '正在启动…', description: `${project.name} 正在启动并进行健康检查`, duration: 1000 });
+      // 用户主动点击“启动”视为重新允许守护，将 manual_stopped 置为 false
+      updateMutation.mutate({ id: project.id, data: { manual_stopped: false } });
+      showInfo('正在启动…', `${project.name} 正在启动并进行健康检查`, 1000);
 
       const startResult = await startProcess(project);
 
@@ -271,118 +259,90 @@ export default function Dashboard() {
       if (startResult && startResult.ok === false) {
         const lastErr = (startResult.logs?.stderr || []).slice(-10).join('\n');
         await stopProcess(project.id).catch(() => {});
-        updateMutation.mutate({ id: project.id, data: { status: 'error' } });
-        toast({ title: '启动失败', description: `已终止进程。${lastErr || startResult.error || '未知错误'}`, duration: 4000 });
+        showError(MESSAGES.START_ERROR, `已终止进程。${lastErr || startResult.error || '未知错误'}`, 4000);
         return;
       }
 
-      let ok = false;
-      if (project.port) {
-        ok = await checkPortReady(project.port);
-      } else {
-        ok = await waitForRunningStatus(project.id);
-      }
+      const ok = await waitForRunningStatus(project.id);
 
       if (ok) {
         updateMutation.mutate({
           id: project.id,
-          data: { 
-            status: 'running', 
+          data: {
             last_started: new Date().toISOString(),
-            manual_stopped: false,  // 确保清除手动停止标记
-            restart_count: 0  // 手动启动成功后重置守护进程重启计数
-          }
+            manual_stopped: false,
+            restart_count: 0,
+          },
         });
-        notifiedMaxIdsRef.current.delete(project.id);
-        toast({ title: '启动成功', description: `${project.name} 已启动并通过健康检查`, duration: 1000 });
+        showSuccess(MESSAGES.START_SUCCESS, `${project.name} 已启动并通过健康检查`, 1000);
+        // 启动成功后立即从后端刷新一次运行态
+        await refreshRuntimeFor(project.id);
       } else {
         await stopProcess(project.id).catch(() => {});
-        updateMutation.mutate({ id: project.id, data: { status: 'error' } });
         // 取后端日志作为真实错误信息
         const logs = await getProjectLogs(project.id).catch(() => ({ stdout: [], stderr: [] }));
         const lastErr = logs.stderr?.slice(-10).join('\n') || logs.stdout?.slice(-10).join('\n') || '健康检查未通过';
-        toast({ title: '启动失败', description: `健康检查超时，已终止进程。${lastErr}`, duration: 4000 });
+        showError(MESSAGES.START_ERROR, `健康检查超时，已终止进程。${lastErr}`, 4000);
       }
     } catch (e) {
-      updateMutation.mutate({ id: project.id, data: { status: 'error' } });
       // 如果后端返回了结构化错误（通过 startProject 返回），e 可能是字符串；已在上面处理
-      toast({ title: '启动失败', description: String(e).slice(0, 300), duration: 4000 });
+      showError(MESSAGES.START_ERROR, String(e).slice(0, 300), 4000);
     }
   };
 
   const handleStop = async (project) => {
+    const id = project?.id;
+    if (!id) return;
+
     try {
-      // 手动操作前，取消该任务的守护定时器
-      cancelGuardianFor(project.id);
       await stopProcess(project);
-      updateMutation.mutate({
-        id: project.id,
-        data: { 
-          status: 'stopped',
-          manual_stopped: true
-        }
-      });
-      toast({ title: '已停止', description: `${project.name} 已停止`, duration: 1000 });
+      updateMutation.mutate({ id, data: { manual_stopped: true } });
+      showSuccess(MESSAGES.STOP_SUCCESS, `${project.name} 已停止`, 1000);
+      // 停止成功后立即从后端刷新一次运行态
+      await refreshRuntimeFor(id);
     } catch (e) {
-      toast({ title: '停止失败', description: String(e).slice(0, 200), duration: 1000 });
+      showError(MESSAGES.STOP_ERROR, String(e).slice(0, 200), 1000);
     }
   };
 
   const handleRestart = async (project) => {
     try {
-      // 手动操作前，取消该任务的守护定时器
-      cancelGuardianFor(project.id);
       if (!project.start_command || !String(project.start_command).trim()) {
-        toast({ title: '无法重启', description: '请先在任务设置中填写启动命令（start_command）', duration: 3000 });
+        showError('无法重启', '请先在任务设置中填写启动命令（start_command）');
         return;
       }
       await stopProcess(project).catch(() => {});
-      updateMutation.mutate({
-          id: project.id,
-          data: { 
-            status: 'executing'
-          }
-        });
-      toast({ title: '正在重启…', description: `${project.name} 正在重启并进行健康检查`, duration: 1000 });
+      showInfo('正在重启…', `${project.name} 正在重启并进行健康检查`, 1000);
       const startResult = await startProcess(project);
 
       if (startResult && startResult.ok === false) {
         const lastErr = (startResult.logs?.stderr || []).slice(-10).join('\n');
         await stopProcess(project).catch(() => {});
-        updateMutation.mutate({ id: project.id, data: { status: 'error' } });
-        toast({ title: '重启失败', description: `已终止进程。${lastErr || startResult.error || '未知错误'}`, duration: 4000 });
+        showError(MESSAGES.RESTART_ERROR, `已终止进程。${lastErr || startResult.error || '未知错误'}`, 4000);
         return;
       }
 
-      let ok = false;
-      if (project.port) {
-        ok = await checkPortReady(project.port);
-      } else {
-        ok = await waitForRunningStatus(project.id);
+      const ok = await waitForRunningStatus(project.id);
+      // 重启操作同样视为重新允许守护；仅在成功时更新 last_started / restart_count
+      const updateData = { manual_stopped: false };
+      if (ok) {
+        updateData.last_started = new Date().toISOString();
+        updateData.restart_count = 0;
       }
-
-      updateMutation.mutate({
-        id: project.id,
-        data: { 
-          last_started: new Date().toISOString(),
-          status: ok ? 'running' : 'error',
-          manual_stopped: false,  // 清除手动停止标记
-          ...(ok && { restart_count: 0 }) // 成功时才重置守护进程重启计数
-          // 注意：手动重启不增加 restart_count，该计数仅用于守护进程自动重启
-        }
-      });
+      updateMutation.mutate({ id: project.id, data: updateData });
 
       if (ok) {
-        notifiedMaxIdsRef.current.delete(project.id);
-        toast({ title: '重启成功', description: `${project.name} 已重启并通过健康检查`, duration: 1000 });
+        showSuccess(MESSAGES.RESTART_SUCCESS, `${project.name} 已重启并通过健康检查`, 1000);
+        // 重启成功后立即从后端刷新一次运行态
+        await refreshRuntimeFor(project.id);
       } else {
         await stopProcess(project.id).catch(() => {});
         const logs = await getProjectLogs(project.id).catch(() => ({ stdout: [], stderr: [] }));
         const lastErr = logs.stderr?.slice(-10).join('\n') || logs.stdout?.slice(-10).join('\n') || '健康检查未通过';
-        toast({ title: '重启失败', description: `健康检查超时，已终止进程。${lastErr}`, duration: 4000 });
+        showError(MESSAGES.RESTART_ERROR, `健康检查超时，已终止进程。${lastErr}`, 4000);
       }
     } catch (e) {
-      toast({ title: '重启失败', description: String(e).slice(0, 300), duration: 4000 });
+      showError(MESSAGES.RESTART_ERROR, String(e).slice(0, 300), 4000);
     }
   };
 
@@ -392,30 +352,77 @@ export default function Dashboard() {
   };
 
   // 新增：删除处理
-  const handleDelete = async (project) => {
+  const handleDelete = (project) => {
     if (!project?.id) return;
-    const name = project.name || project.id;
-    const confirmDelete = window.confirm(`确认删除任务「${name}」？此操作不可撤销。`);
-    if (!confirmDelete) return;
+    setProjectToDelete(project);
+    setDeleteConfirmOpen(true);
+  };
+
+  const confirmDelete = async () => {
+    if (!projectToDelete?.id) return;
     try {
-      await deleteMutation.mutateAsync(project.id);
+      await deleteMutation.mutateAsync(projectToDelete.id);
+      setDeleteConfirmOpen(false);
+      setProjectToDelete(null);
     } catch {
       // 错误在 mutation 的 onError 中处理
     }
   };
 
-  const filteredProjects = projects.filter(project => {
+  const runProcQuery = async () => {
+    const q = String(procQueryName || '').trim();
+    if (!q) { setProcResults([]); return; }
+    setProcLoading(true);
+    try {
+      const arr = await searchProcessesByName(q);
+      setProcResults(Array.isArray(arr) ? arr : []);
+    } catch (e) {
+      showError('查询失败', String(e?.message || e));
+    } finally {
+      setProcLoading(false);
+    }
+  };
+
+  const runPortQuery = async () => {
+    const p = parseInt(String(portQueryValue || '').trim(), 10);
+    if (!Number.isFinite(p) || p <= 0) { setPortResults([]); return; }
+    setPortLoading(true);
+    try {
+      const arr = await listProcessesByPort(p);
+      setPortResults(Array.isArray(arr) ? arr : []);
+    } catch (e) {
+      showError('查询失败', String(e?.message || e));
+    } finally {
+      setPortLoading(false);
+    }
+  };
+
+  const handleStopFromQuery = async (pid, kind) => {
+    try {
+      await killProcess(pid);
+      showSuccess('已发送停止信号', `PID ${pid}`);
+
+      if (kind === 'name') await runProcQuery();
+      if (kind === 'port') await runPortQuery();
+    } catch (e) {
+      showError('停止失败', String(e?.message || e));
+    }
+  };
+
+  const displayProjects = projects;
+  const filteredProjects = displayProjects.filter(project => {
     const matchesSearch = project.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
                          project.description?.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesCategory = categoryFilter === "all" || project.category === categoryFilter;
-    const matchesStatus = statusFilter === "all" || project.status === statusFilter;
+    const dispStatus = runtimeStatus[project.id] ?? 'stopped';
+    const matchesStatus = statusFilter === "all" || dispStatus === statusFilter;
     
     return matchesSearch && matchesCategory && matchesStatus;
   });
 
   function statusRank(s) {
-    // 状态排序优先级：运行中 > 执行中 > 已停止 > 错误
-    const order = { running: 4, executing: 3, stopped: 2, error: 1 };
+    // 状态排序优先级：运行中 > 已停止
+    const order = { running: 2, stopped: 1 };
     return order[s] || 0;
   }
 
@@ -446,105 +453,28 @@ export default function Dashboard() {
     }
   }
 
-  const sortedProjects = sortProjects(filteredProjects);
+  const sortedProjects = sortProjects(
+    filteredProjects.map((p) => ({
+      ...p,
+      status: runtimeStatus[p.id] ?? 'stopped',
+      runtime_pid: runtimePid[p.id] ?? p.runtime_pid ?? null,
+    })),
+  );
 
   const stats = {
-    total: projects.length,
-    running: projects.filter(p => p.status === 'running').length,
-    stopped: projects.filter(p => p.status === 'stopped').length,
+    total: displayProjects.length,
+    running: displayProjects.filter(p => (runtimeStatus[p.id] ?? 'stopped') === 'running').length,
+    stopped: displayProjects.filter(p => (runtimeStatus[p.id] ?? 'stopped') === 'stopped').length,
     withGuard: projects.filter(p => p.auto_restart).length,
   };
 
-  // 记录当前会话结束时哪些任务处于运行状态，以便下次系统重启后执行守护恢复
-  useEffect(() => {
-    const onBeforeUnload = () => {
-      let arr = [];
-      try { arr = listProjects(); } catch { arr = []; }
-      for (const p of arr) {
-        try {
-          // 直接写入本地存储，确保在刷新/关闭页面时可靠落盘
-          updateProject(p.id, { was_running_before_shutdown: p.status === 'running' });
-        } catch (e) { /* ignore */ void e; }
-      }
-    };
-    window.addEventListener('beforeunload', onBeforeUnload);
-    return () => window.removeEventListener('beforeunload', onBeforeUnload);
-  }, []);
+  // 前端不在生命周期事件中写入任何状态，严格由后端提供
+  useEffect(() => {}, []);
 
-  // 会话启动时的“一次性系统重启守护流程”：仅针对上次会话处于运行状态、开启守护且未被手动停止的任务
+  // 保守策略：应用重启后仅展示现有运行进程，不在前端自动触发任何任务的守护启动
   useEffect(() => {
     if (!projects || projects.length === 0) return;
-    if (bootGuardRanRef.current) return;
-    bootGuardRanRef.current = true;
-
-    const candidates = projects.filter(p => p.auto_restart && p.was_running_before_shutdown && !p.manual_stopped && p.status !== 'running');
-    for (const p of candidates) {
-      runGuardian(p.id);
-    }
-  }, [projects]);
-
-  // 在组件卸载时清理所有守护定时器，避免内存泄漏
-  useEffect(() => {
-    return () => {
-      for (const id of Array.from(guardianTimersRef.current.keys())) {
-        cancelGuardianFor(id);
-      }
-    };
-  }, []);
-
-  // 通用守护监控：当选中了守护进程（auto_restart）的任务时，按间隔检查是否运行；未运行则触发守护启动
-  useEffect(() => {
-    if (!projects || projects.length === 0) return;
-
-    // 为需要守护的任务建立监控定时器
-    for (const p of projects) {
-      // 不需要守护或手动停止的任务：取消监控
-      if (!p.auto_restart || p.manual_stopped) {
-        cancelGuardianFor(p.id);
-        continue;
-      }
-
-      // 已有定时器则跳过，避免重复创建
-      if (guardianTimersRef.current.has(p.id)) continue;
-
-      const intervalSec = typeof p.restart_interval === 'number' ? p.restart_interval : 15;
-      const timer = setInterval(async () => {
-        let arr = [];
-        try { arr = listProjects(); } catch { arr = []; }
-        const latest = arr.find(x => x.id === p.id);
-        if (!latest) { cancelGuardianFor(p.id); return; }
-        if (latest.manual_stopped || !latest.auto_restart) { cancelGuardianFor(p.id); return; }
-
-        // 跳过正在启动中的任务，避免并发冲突
-        if (latest.status === 'executing') return;
-
-        // 真实运行状态检测
-        let actuallyRunning = false;
-        try {
-          if (latest.port) {
-            actuallyRunning = await checkPortReady(latest.port, 2, 500);
-          } else {
-            const status = await getProjectStatus(latest.id);
-            actuallyRunning = status?.running || false;
-          }
-        } catch { /* ignore */ }
-
-        // 未运行则触发守护流程（会自行进行启动与健康检查，并按间隔重试）
-        if (!actuallyRunning) {
-          runGuardian(latest.id);
-        }
-      }, Math.max(1, intervalSec) * 1000);
-
-      guardianTimersRef.current.set(p.id, timer);
-      guardianActiveIdsRef.current.add(p.id);
-    }
-
-    // 清理不在列表中的任务定时器
-    for (const id of Array.from(guardianTimersRef.current.keys())) {
-      if (!projects.find(p => p.id === id)) {
-        cancelGuardianFor(id);
-      }
-    }
+    // 不做自动干预，只依赖后端状态接口（/api/projects/status）进行展示和手动控制
   }, [projects]);
 
   if (showForm) {
@@ -588,6 +518,14 @@ export default function Dashboard() {
 
       <div className="max-w-7xl mx-auto px-6 py-8">
         {/* 右侧 Toast 自动提示，顶部不再显示状态卡片 */}
+        <div className="flex gap-2 mb-4">
+          <Button variant="outline" onClick={() => setProcQueryOpen(true)}>
+            查询任务进程
+          </Button>
+          <Button variant="outline" onClick={() => setPortQueryOpen(true)}>
+            查询端口
+          </Button>
+        </div>
         {/* 统计卡片 */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
           <motion.div
@@ -663,10 +601,8 @@ export default function Dashboard() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">全部状态</SelectItem>
-                <SelectItem value="executing">执行中</SelectItem>
                 <SelectItem value="running">运行中</SelectItem>
                 <SelectItem value="stopped">已停止</SelectItem>
-                <SelectItem value="error">错误</SelectItem>
               </SelectContent>
             </Select>
 
@@ -770,6 +706,7 @@ export default function Dashboard() {
                           onRestart={handleRestart}
                           onEdit={handleEdit}
                           onDelete={handleDelete}
+                          viewMode={viewMode}
                         />
                       ))}
                     </AnimatePresence>
@@ -792,6 +729,7 @@ export default function Dashboard() {
                     onRestart={handleRestart}
                     onEdit={handleEdit}
                     onDelete={handleDelete}
+                    viewMode={viewMode}
                   />
                 ))}
               </AnimatePresence>
@@ -801,6 +739,146 @@ export default function Dashboard() {
       </div>
 
       {/* 已移除命令提示弹窗 */}
+
+      {/* 删除确认对话框 */}
+      <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+        <AlertDialogContent className="sm:max-w-md">
+          <AlertDialogHeader className="space-y-3">
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-red-100">
+              <svg className="h-6 w-6 text-red-600" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+              </svg>
+            </div>
+            <AlertDialogTitle className="text-center text-xl">删除任务</AlertDialogTitle>
+            <AlertDialogDescription className="text-center text-base">
+              确定要删除任务 <span className="font-semibold text-gray-900">「{projectToDelete?.name || '未命名'}」</span> 吗？
+              <br />
+              <span className="text-red-600">此操作无法撤销</span>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="sm:space-x-2">
+            <AlertDialogCancel onClick={() => { setDeleteConfirmOpen(false); setProjectToDelete(null); }}>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDelete} className="bg-red-600 hover:bg-red-700">确认删除</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <Dialog open={procQueryOpen} onOpenChange={setProcQueryOpen}>
+        <DialogContent className="sm:max-w-xl">
+          <DialogHeader>
+            <DialogTitle>查询任务进程</DialogTitle>
+            <DialogDescription>输入任务名称关键词</DialogDescription>
+          </DialogHeader>
+          <div className="flex gap-2">
+            <Input
+              value={procQueryName}
+              onChange={(e) => setProcQueryName(e.target.value)}
+              placeholder="任务名称关键词"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  runProcQuery();
+                }
+              }}
+            />
+            <Button onClick={runProcQuery}>查询</Button>
+          </div>
+          <div className="grid grid-cols-[120px_120px_1fr_80px] items-center px-2 py-2 text-xs text-gray-500">
+            <div>PID</div>
+            <div>进程名</div>
+            <div>命令行</div>
+            <div className="text-right">操作</div>
+          </div>
+          <div className="space-y-2 max-h-72 overflow-auto">
+            {procLoading && (
+              <div className="text-sm text-gray-500">查询中…</div>
+            )}
+            {!procLoading && procResults.length === 0 && (
+              <div className="text-sm text-gray-500">无匹配进程</div>
+            )}
+            {procResults.map((item) => (
+              <div
+                key={`${item.pid}-${item.command}`}
+                className="grid grid-cols-[120px_120px_1fr_80px] items-center gap-2 px-2 py-2 rounded text-sm hover:bg-accent"
+              >
+                <div className="font-mono">{item.pid}</div>
+                <div className="truncate font-mono">
+                  {item.command ? String(item.command).split(/\s+/)[0] : ''}
+                </div>
+                <div className="truncate font-mono" title={item.command}>
+                  {item.command}
+                </div>
+                <div className="text-right">
+                  <Button size="sm" variant="destructive" onClick={() => handleStopFromQuery(item.pid, 'name')}>停止</Button>
+                </div>
+              </div>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setProcQueryOpen(false)}>关闭</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={portQueryOpen} onOpenChange={setPortQueryOpen}>
+        <DialogContent className="sm:max-w-xl">
+          <DialogHeader>
+            <DialogTitle>查询端口</DialogTitle>
+            <DialogDescription>输入端口号</DialogDescription>
+          </DialogHeader>
+          <div className="flex gap-2">
+            <Input
+              value={portQueryValue}
+              onChange={(e) => setPortQueryValue(e.target.value)}
+              placeholder="端口号"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  runPortQuery();
+                }
+              }}
+            />
+            <Button onClick={runPortQuery}>查询</Button>
+          </div>
+          <div className="grid grid-cols-[120px_100px_1fr_80px] items-center px-2 py-2 text-xs text-gray-500">
+            <div>PID</div>
+            <div>进程名</div>
+            <div>详情</div>
+            <div className="text-right">操作</div>
+          </div>
+          <div className="space-y-2 max-h-72 overflow-auto">
+            {portLoading && (
+              <div className="text-sm text-gray-500">查询中…</div>
+            )}
+            {!portLoading && portResults.length === 0 && (
+              <div className="text-sm text-gray-500">无占用记录</div>
+            )}
+            {portResults.map((item) => (
+              <div
+                key={`${item.pid}-${item.name || item.command}`}
+                className="grid grid-cols-[120px_100px_1fr_80px] items-center gap-2 px-2 py-2 rounded text-sm hover:bg-accent"
+              >
+                <div className="font-mono">{item.pid}</div>
+                <div className="truncate font-mono">
+                  {item.command ? String(item.command).split(/\s+/)[0] : ''}
+                </div>
+                <div
+                  className="truncate font-mono"
+                  title={`${item.command || ''}${item.name ? ` ${item.name}` : ''}`}
+                >
+                  {item.command}{item.name ? ` ${item.name}` : ''}
+                </div>
+                <div className="text-right">
+                  <Button size="sm" variant="destructive" onClick={() => handleStopFromQuery(item.pid, 'port')}>停止</Button>
+                </div>
+              </div>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPortQueryOpen(false)}>关闭</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

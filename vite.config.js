@@ -6,7 +6,13 @@ import path from 'path'
 export default defineConfig({
   plugins: [react()],
   server: {
-    allowedHosts: true
+    allowedHosts: true,
+    proxy: {
+      '/api': {
+        target: `http://127.0.0.1:${process.env.VITE_API_PORT || 3001}`,
+        changeOrigin: true,
+      }
+    }
   },
   resolve: {
     alias: {
@@ -21,4 +27,4 @@ export default defineConfig({
       },
     },
   },
-}) 
+})

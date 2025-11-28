@@ -1,4 +1,4 @@
-const BASE_URL = 'http://127.0.0.1:3001/api';
+const BASE_URL = '/api';
 
 async function jsonFetch(url, options = {}) {
   const res = await fetch(url, {
@@ -55,4 +55,39 @@ export async function getProjectStatus(id) {
 
 export async function getProjectLogs(id) {
   return jsonFetch(`${BASE_URL}/projects/logs/${id}`);
+}
+
+export async function searchProcessesByName(name) {
+  const q = encodeURIComponent(String(name || ''));
+  return jsonFetch(`${BASE_URL}/processes/search?name=${q}`);
+}
+
+export async function listProcessesByPort(port) {
+  const p = encodeURIComponent(String(port || ''));
+  return jsonFetch(`${BASE_URL}/processes/by-port/${p}`);
+}
+
+export async function killProcess(pid, signal = 'SIGTERM') {
+  return jsonFetch(`${BASE_URL}/processes/kill`, {
+    method: 'POST',
+    body: JSON.stringify({ pid, signal }),
+  });
+}
+
+export async function restartProject(project) {
+  const payload = typeof project === 'object' && project !== null
+    ? {
+        id: project.id,
+        start_command: project.start_command,
+        stop_command: project.stop_command,
+        working_directory: project.working_directory,
+        environment_variables: project.environment_variables,
+        startup_timeout_ms: 2000,
+      }
+    : null;
+  if (!payload) throw new Error('invalid project');
+  return jsonFetch(`${BASE_URL}/projects/restart`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
 }

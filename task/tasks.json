@@ -1,0 +1,29 @@
+[
+  {
+    "id": "proj_mifqn3sa_tobhph",
+    "name": "aaaaaaa啊啊啊啊啊啊啊",
+    "description": "",
+    "group": "",
+    "category": "other",
+    "working_directory": "/Users/zhangjinwei/Desktop/opget/backend",
+    "start_command": "python main.py",
+    "stop_command": "",
+    "port": 6001,
+    "environment_variables": {},
+    "status": "stopped",
+    "auto_restart": true,
+    "max_restarts": 5,
+    "restart_interval": 15,
+    "scheduled_start": "",
+    "scheduled_stop": "",
+    "restart_count": 0,
+    "manual_stopped": true,
+    "was_running_before_shutdown": true,
+    "notes": "",
+    "order_index": 0,
+    "created_date": "2025-11-26T08:23:52.810Z",
+    "updated_date": "2025-11-27T07:23:03.786Z",
+    "runtime_pid": null,
+    "last_started": "2025-11-27T07:22:57.089Z"
+  }
+]

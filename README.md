@@ -30,3 +30,8 @@ npm run build
 - 项目启动/停止/重启（会自动检查端口是否被占用）
 - 会在后台持续检查已添加守护进程的任务，直到手动停止
 - streamlit 项目类型，会自动在启动命令中使用 `Python -m streamlit run` 命令，若需指定 conda 环境，需使用 `conda run -n <env_name> Python -m streamlit run`
+
+
+## 界面预览
+
+![应用界面预览](fig/2025-10-23_14-11-00.jpg)
