@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import PropTypes from 'prop-types';
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -9,22 +9,82 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { X, Plus } from "lucide-react";
+import { getCommandConfig } from "@/api/commandConfig";
 
-const categories = [
+// 检测当前平台
+const detectPlatform = () => {
+  const userAgent = navigator.userAgent.toLowerCase();
+  if (userAgent.includes('win')) return 'windows';
+  if (userAgent.includes('mac')) return 'macos';
+  if (userAgent.includes('linux')) return 'linux';
+  return 'unknown';
+};
+
+// 平台显示名称映射
+const platformDisplayName = {
+  windows: 'Windows',
+  macos: 'MacOS',
+  linux: 'Linux',
+  unknown: '未知平台'
+};
+
+// 默认的任务类型（当 API 加载失败时使用）
+const defaultCategories = [
   { value: "frontend", label: "前端" },
   { value: "backend", label: "后端" },
-  { value: "desktop", label: "应用" },
-  { value: "script", label: "脚本" },
-  { value: "other", label: "其他" }
+  { value: "shell", label: "Shell 脚本" },
+  { value: "python", label: "Python 脚本" },
+  { value: "other", label: "其他" },
 ];
 
 export default function ProjectForm({ project, existingGroups = [], onSave, onCancel }) {
+  // 动态加载的配置
+  const [categories, setCategories] = useState(defaultCategories);
+  const [currentPlatform, setCurrentPlatform] = useState(detectPlatform());
+
+  // 从后端加载命令配置
+  useEffect(() => {
+    const loadConfig = async () => {
+      try {
+        const data = await getCommandConfig();
+        const platform = data.currentPlatform || detectPlatform();
+        setCurrentPlatform(platform);
+
+        if (data.config && data.config[platform]) {
+          const platformConfig = data.config[platform];
+          if (platformConfig.categories) {
+            setCategories(platformConfig.categories);
+          }
+        }
+      } catch {
+        // 加载失败时使用默认配置
+      }
+    };
+    loadConfig();
+  }, []);
+
+  // 根据任务类型返回文件名占位符提示
+  const getCommandPlaceholder = (category) => {
+    // 简单的文件名示例
+    const placeholders = {
+      shell: 'start.sh',
+      executable: 'my_program',
+      app: 'Safari',
+      python: 'main.py',
+      exe: 'program.exe',
+      bat: 'run.bat',
+      powershell: 'script.ps1',
+      other: 'command',
+    };
+    return placeholders[category] || placeholders.other;
+  };
+
   // 为避免旧数据缺少字段导致 Select/Inputs 受控状态报错，统一提供默认值并与传入的 project 合并
   const defaultForm = {
     name: "",
     description: "",
     group: "",
-    category: "other",
+    category: "",
     working_directory: "",
     start_command: "",
     stop_command: "",
@@ -38,6 +98,7 @@ export default function ProjectForm({ project, existingGroups = [], onSave, onCa
     scheduled_stop: "",
     restart_count: 0,
     notes: "",
+    script_content: "",  // Shell 脚本内容
   };
 
   const [formData, setFormData] = useState(project ? { ...defaultForm, ...project } : defaultForm);
@@ -80,7 +141,12 @@ export default function ProjectForm({ project, existingGroups = [], onSave, onCa
   return (
     <Card className="max-w-4xl mx-auto">
       <CardHeader>
-        <CardTitle>{project ? "编辑任务" : "新建任务"}</CardTitle>
+        <CardTitle className="flex items-center justify-between">
+          <span>{project ? "编辑任务" : "新建任务"}</span>
+          <span className="text-sm font-normal text-gray-500 bg-gray-100 px-3 py-1 rounded-full">
+            平台: {platformDisplayName[currentPlatform]}
+          </span>
+        </CardTitle>
       </CardHeader>
       <form onSubmit={handleSubmit}>
         <CardContent>
@@ -107,7 +173,7 @@ export default function ProjectForm({ project, existingGroups = [], onSave, onCa
                  </div>
 
                  <div>
-                  <Label htmlFor="group">任务组（可选）</Label>
+                  <Label htmlFor="group">任务组</Label>
                    {customGroupMode ? (
                      <div className="flex items-center gap-2">
                        <Input
@@ -162,14 +228,20 @@ export default function ProjectForm({ project, existingGroups = [], onSave, onCa
                    />
                  </div>
 
-                 <div>
-                  <Label htmlFor="category">任务类型</Label>
-                   <Select
-                     value={formData.category}
-                     onValueChange={(value) => handleChange('category', value)}
-                   >
+                {/* 任务类型 和 工作目录 在同一行 */}
+                <div>
+                  <Label htmlFor="category">
+                    任务类型 *
+                    <span className="ml-2 text-xs text-gray-500 font-normal">
+                      ({platformDisplayName[currentPlatform]})
+                    </span>
+                  </Label>
+                  <Select
+                    value={formData.category}
+                    onValueChange={(value) => handleChange('category', value)}
+                  >
                     <SelectTrigger>
-                      <SelectValue />
+                      <SelectValue placeholder="请选择任务类型" />
                     </SelectTrigger>
                     <SelectContent>
                       {categories.map(cat => (
@@ -182,23 +254,6 @@ export default function ProjectForm({ project, existingGroups = [], onSave, onCa
                 </div>
 
                 <div>
-                  <Label htmlFor="port">端口号(用于任务检查) {project ? '' : '*'} </Label>
-                  <Input
-                    id="port"
-                    type="number"
-                    value={formData.port ?? ''}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      handleChange('port', val === '' ? '' : parseInt(val, 10));
-                    }}
-                    placeholder="3000"
-                    required={!project}
-                    min="1"
-                    max="65535"
-                  />
-                </div>
-
-                <div className="col-span-2">
                   <Label htmlFor="working_directory">工作目录</Label>
                   <Input
                     id="working_directory"
@@ -208,17 +263,60 @@ export default function ProjectForm({ project, existingGroups = [], onSave, onCa
                   />
                 </div>
 
-                <div className="col-span-2">
-                  <Label htmlFor="start_command">启动命令 *</Label>
+                {/* 端口号 和 文件名 在同一行 */}
+                <div>
+                  <Label htmlFor="port">端口号（可选）</Label>
+                  <Input
+                    id="port"
+                    type="number"
+                    value={formData.port ?? ''}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      handleChange('port', val === '' ? '' : parseInt(val, 10));
+                    }}
+                    placeholder="3000"
+                    min="1"
+                    max="65535"
+                  />
+                </div>
+
+                <div>
+                  <Label htmlFor="start_command">
+                    {formData.category === 'shell' ? '脚本名称' : '文件名'}
+                  </Label>
                   <Input
                     id="start_command"
                     value={formData.start_command}
                     onChange={(e) => handleChange('start_command', e.target.value)}
-                    placeholder="如: python main.py"
+                    placeholder={formData.category === 'shell' ? 'my_script.sh' : getCommandPlaceholder(formData.category)}
                     required
                     className="font-mono"
                   />
                 </div>
+
+                {/* Shell 脚本内容输入框 */}
+                {formData.category === 'shell' && (
+                  <div className="col-span-2">
+                    <Label htmlFor="script_content">
+                      脚本内容 *
+                      <span className="ml-2 text-xs text-gray-500 font-normal">
+                        (直接粘贴 Shell 脚本内容，避免后台进程问题)
+                      </span>
+                    </Label>
+                    <Textarea
+                      id="script_content"
+                      value={formData.script_content || ''}
+                      onChange={(e) => handleChange('script_content', e.target.value)}
+                      placeholder={`#!/bin/bash\n\n# 在这里粘贴你的脚本内容\necho "Hello World"\n\n# 注意：不要使用 & 将进程放到后台`}
+                      rows={10}
+                      className="font-mono text-sm"
+                      required
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      提示：请将 .sh 文件的完整内容粘贴到这里，系统会直接执行脚本内容而非运行脚本文件
+                    </p>
+                  </div>
+                )}
 
                 <div className="col-span-2">
                   <Label htmlFor="stop_command">停止命令</Label>
@@ -399,6 +497,7 @@ ProjectForm.propTypes = {
     scheduled_stop: PropTypes.string,
     restart_count: PropTypes.number,
     notes: PropTypes.string,
+    script_content: PropTypes.string,
   }),
   existingGroups: PropTypes.arrayOf(PropTypes.string),
   onSave: PropTypes.func.isRequired,

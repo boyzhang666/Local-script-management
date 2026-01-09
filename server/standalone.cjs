@@ -37,13 +37,8 @@ function patchProject(id, patch, opts = {}) {
   writeProjectsFile(items);
 }
 
-function isPidAlive(pid) {
-  if (!pid || Number.isNaN(Number(pid))) return false;
-  try { process.kill(Number(pid), 0); return true; } catch { return false; }
-}
-
 const processes = new Map();
-function isRunning(child) { return child && child.exitCode === null && !child.killed; }
+function isRunning(child) { return !!child && child.exitCode === null && child.signalCode === null; }
 const guardianState = new Map(); // id -> { nextAttemptAt: number }
 function ringBuffer(limit = 200) {
   const arr = [];
@@ -76,11 +71,98 @@ function taskFilePath() {
   return path.join(dir, 'tasks.json');
 }
 
+function commandConfigPath() {
+  const dir = ensureTaskDir();
+  return path.join(dir, 'command-config.json');
+}
+
+function getDefaultCommandConfig() {
+  return {
+    windows: {
+      categories: [
+        { value: 'frontend', label: '前端' },
+        { value: 'backend', label: '后端' },
+        { value: 'exe', label: 'EXE 程序' },
+        { value: 'bat', label: 'BAT 批处理' },
+        { value: 'powershell', label: 'PowerShell 脚本' },
+        { value: 'other', label: '其他' },
+      ],
+      commandTemplates: {
+        frontend: { pattern: '{cmd}', description: '直接执行命令' },
+        backend: { pattern: '{cmd}', description: '直接执行命令' },
+        exe: { pattern: '{cmd}', description: '直接执行 EXE 程序' },
+        bat: { pattern: 'cmd /c {cmd}', description: '使用 cmd /c 执行批处理' },
+        powershell: { pattern: 'powershell -ExecutionPolicy Bypass -File {cmd}', description: '使用 PowerShell 执行脚本' },
+        other: { pattern: '{cmd}', description: '直接执行命令' },
+      },
+    },
+    macos: {
+      categories: [
+        { value: 'frontend', label: '前端' },
+        { value: 'backend', label: '后端' },
+        { value: 'shell', label: 'Shell 脚本' },
+        { value: 'executable', label: '可执行程序' },
+        { value: 'app', label: '应用程序' },
+        { value: 'python', label: 'Python 脚本' },
+        { value: 'other', label: '其他' },
+      ],
+      commandTemplates: {
+        frontend: { pattern: '{cmd}', description: '直接执行命令' },
+        backend: { pattern: '{cmd}', description: '直接执行命令' },
+        shell: { pattern: 'bash {cmd}', description: '使用 bash 执行 Shell 脚本' },
+        executable: { pattern: 'chmod +x {cmd} 2>/dev/null; {cmd}', description: '添加执行权限后运行' },
+        app: { pattern: 'open -a \"{cmd}\"', description: '使用 open -a 打开应用程序' },
+        python: { pattern: 'python3 {cmd} 2>/dev/null || python {cmd}', description: '优先使用 python3 执行' },
+        other: { pattern: '{cmd}', description: '直接执行命令' },
+      },
+    },
+    linux: {
+      categories: [
+        { value: 'frontend', label: '前端' },
+        { value: 'backend', label: '后端' },
+        { value: 'shell', label: 'Shell 脚本' },
+        { value: 'executable', label: '可执行程序' },
+        { value: 'python', label: 'Python 脚本' },
+        { value: 'other', label: '其他' },
+      ],
+      commandTemplates: {
+        frontend: { pattern: '{cmd}', description: '直接执行命令' },
+        backend: { pattern: '{cmd}', description: '直接执行命令' },
+        shell: { pattern: 'bash {cmd}', description: '使用 bash 执行 Shell 脚本' },
+        executable: { pattern: 'chmod +x {cmd} 2>/dev/null; {cmd}', description: '添加执行权限后运行' },
+        python: { pattern: 'python3 {cmd} 2>/dev/null || python {cmd}', description: '优先使用 python3 执行' },
+        other: { pattern: '{cmd}', description: '直接执行命令' },
+      },
+    },
+  };
+}
+
+function readCommandConfig() {
+  try {
+    const raw = fs.readFileSync(commandConfigPath(), 'utf8');
+    const config = JSON.parse(raw);
+    const defaults = getDefaultCommandConfig();
+    return {
+      windows: { ...defaults.windows, ...config.windows },
+      macos: { ...defaults.macos, ...config.macos },
+      linux: { ...defaults.linux, ...config.linux },
+    };
+  } catch {
+    return getDefaultCommandConfig();
+  }
+}
+
+function writeCommandConfig(config) {
+  try {
+    fs.writeFileSync(commandConfigPath(), JSON.stringify(config, null, 2));
+  } catch {}
+}
+
 function writeProjectsFile(items) {
   try {
     const sanitized = (Array.isArray(items) ? items : []).map((p) => {
       if (!p || typeof p !== 'object') return p;
-      const { status, runtime_pid, ...rest } = p;
+      const { status, ...rest } = p;
       return rest;
     });
     fs.writeFileSync(taskFilePath(), JSON.stringify(sanitized, null, 2));
@@ -98,6 +180,27 @@ function readProjectsFile() {
     return [];
   }
 }
+
+function getProjectById(id) {
+  if (!id) return null;
+  const items = readProjectsFile();
+  return items.find((p) => p && p.id === id) || null;
+}
+
+function normalizePid(value) {
+  const n = parseInt(String(value ?? '').trim(), 10);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function clearRuntimePidIfMatches(id, pid) {
+  const current = getProjectById(id);
+  if (!current) return;
+  const curPid = normalizePid(current.runtime_pid);
+  const targetPid = normalizePid(pid);
+  if (!curPid || !targetPid) return;
+  if (curPid !== targetPid) return;
+  patchProject(id, { runtime_pid: null }, { skipUpdatedDate: true });
+}
 function collectOutput(command, args, options = {}) {
   return new Promise((resolve) => {
     const child = spawn(command, args, { shell: false, ...options });
@@ -110,6 +213,118 @@ function collectOutput(command, args, options = {}) {
 }
 
 function isWindows() { return process.platform === 'win32'; }
+function isMac() { return process.platform === 'darwin'; }
+function isLinux() { return process.platform === 'linux'; }
+
+// 检测端口是否被占用，返回占用进程的 PID 列表
+async function getProcessesByPort(portNum) {
+  if (!portNum || !Number.isFinite(portNum) || portNum <= 0) return [];
+  if (isWindows()) {
+    const out = await collectOutput('netstat', ['-ano']);
+    const lines = String(out.stdout || '').split('\n').filter(l => l.includes(`:${portNum}`));
+    const pids = new Set();
+    for (const l of lines) {
+      const parts = l.trim().split(/\s+/);
+      const pid = parseInt(parts[parts.length - 1], 10);
+      if (Number.isFinite(pid) && pid > 0) pids.add(pid);
+    }
+    return Array.from(pids);
+  }
+  const out = await collectOutput('lsof', ['-n', '-P', '-i', `:${portNum}`, '-t']);
+  const pids = String(out.stdout || '').split('\n').map(l => parseInt(l.trim(), 10)).filter(p => Number.isFinite(p) && p > 0);
+  return [...new Set(pids)];
+}
+
+// 杀掉占用端口的进程
+async function killProcessesByPort(portNum) {
+  const pids = await getProcessesByPort(portNum);
+  if (pids.length === 0) return { killed: [], failed: [] };
+  const killed = [];
+  const failed = [];
+  for (const pid of pids) {
+    try {
+      await new Promise((resolve) => {
+        treeKill(pid, 'SIGTERM', (err) => {
+          if (err) failed.push({ pid, error: String(err) });
+          else killed.push(pid);
+          resolve();
+        });
+      });
+    } catch (e) {
+      failed.push({ pid, error: String(e) });
+    }
+  }
+  return { killed, failed };
+}
+
+function getCurrentPlatform() {
+  if (isWindows()) return 'windows';
+  if (isMac()) return 'macos';
+  if (isLinux()) return 'linux';
+  return 'linux';
+}
+
+function processCommandByCategory(command, category) {
+  const raw = String(command || '').trim();
+  if (!raw || !category) return raw;
+
+  const config = readCommandConfig();
+  const platform = getCurrentPlatform();
+  const platformConfig = config[platform];
+  if (!platformConfig || !platformConfig.commandTemplates) return raw;
+
+  const template = platformConfig.commandTemplates[category];
+  if (!template || !template.pattern) return raw;
+
+  const pattern = String(template.pattern || '').trim();
+  if (!pattern || pattern === '{cmd}') return raw;
+
+  if (!pattern.includes('{cmd}')) return pattern;
+
+  const startsWithInterpreter = /^(bash|sh|zsh|python|python3|node|powershell|pwsh|cmd)\b/i.test(raw);
+  if (startsWithInterpreter) return raw;
+
+  const hasShellOps = /&&|\|\||[;&|<>`]/.test(raw);
+  if (hasShellOps) return raw;
+
+  const firstToken = raw.split(/\s+/)[0] || raw;
+  const hasArgs = firstToken.length < raw.length;
+
+  const isPathLikeToken = /^(\.\/|\.\.\/|\/|~\/|[A-Za-z]:[\\/])/.test(firstToken) || /[\\/]/.test(firstToken);
+  const effectivePattern = (pattern.includes('./{cmd}') && isPathLikeToken)
+    ? pattern.replace(/\.\/\{cmd\}/g, '{cmd}')
+    : pattern;
+
+  const expandedRegex = (() => {
+    const escaped = effectivePattern.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+    const withGroups = escaped.replace(/\\\{cmd\\\}/g, '(.+?)');
+    return new RegExp(`^${withGroups}$`);
+  })();
+  const match = raw.match(expandedRegex);
+  if (match) {
+    if (raw.includes('{cmd}')) {
+      const captures = match.slice(1).map((s) => String(s || '').trim()).filter(Boolean);
+      const inferred = captures.find((s) => s !== '{cmd}');
+      if (inferred) return effectivePattern.replace(/\{cmd\}/g, inferred);
+    }
+    return raw;
+  }
+
+  const placeholderCount = (effectivePattern.match(/\{cmd\}/g) || []).length;
+  if (placeholderCount <= 1) {
+    return effectivePattern.replace(/\{cmd\}/g, raw);
+  }
+
+  if (!hasArgs) {
+    return effectivePattern.replace(/\{cmd\}/g, raw);
+  }
+
+  let replaced = effectivePattern;
+  replaced = replaced.replace(/\{cmd\}/, firstToken);
+  replaced = replaced.replace(/\{cmd\}/g, raw);
+  return replaced;
+}
+
 async function windowsProcessList() {
   const script = 'Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress';
   let out = await collectOutput('powershell.exe', ['-NoProfile', '-Command', script]);
@@ -166,7 +381,27 @@ function sleep(ms) {
 
 function isTaskRunning(id) {
   const entry = processes.get(id);
-  return !!entry && isRunning(entry.child);
+  if (!entry) return false;
+  return entry.child && isRunning(entry.child);
+}
+
+function resetPersistedRuntimeStateOnBoot() {
+  const items = readProjectsFile();
+  if (!items || items.length === 0) return;
+  let changed = false;
+  const next = items.map((p) => {
+    if (!p || typeof p !== 'object') return p;
+    const hadPid = p.runtime_pid != null;
+    const hadWasRunning = !!p.was_running_before_shutdown;
+    if (!hadPid && !hadWasRunning) return p;
+    changed = true;
+    return { ...p, runtime_pid: null, was_running_before_shutdown: false };
+  });
+  if (changed) writeProjectsFile(next);
+}
+
+function isFireAndForgetCategory(category) {
+  return category === 'app';
 }
 
 async function waitForRunning(id, attempts = 10, intervalMs = 800) {
@@ -183,23 +418,34 @@ async function guardianAttemptStart(project) {
   if (!id || !start_command || !String(start_command).trim()) return false;
   if (isTaskRunning(id)) return true;
 
-  const env = { ...process.env, ...((project.environment_variables && typeof project.environment_variables === 'object') ? project.environment_variables : {}) };
-  const command = start_command;
+  const env = buildTaskEnv(project.environment_variables);
   const cwd = safeCwd(project.working_directory);
-  const child = spawn(command, { cwd, env, shell: true });
+  let command;
+  let child;
+  if (project.category === 'shell' && project.script_content && String(project.script_content).trim()) {
+    command = `bash -s <${start_command || 'script'}>`;
+    child = spawn('bash', ['-s'], { cwd, env, shell: false });
+    child.stdin.end(String(project.script_content));
+  } else {
+    command = processCommandByCategory(start_command, project.category);
+    child = spawn(command, { cwd, env, shell: true });
+  }
   const stdoutBuf = ringBuffer(500); const stderrBuf = ringBuffer(500);
   child.stdout.on('data', (data) => stdoutBuf.push(data.toString()));
   child.stderr.on('data', (data) => stderrBuf.push(data.toString()));
   child.on('error', (err) => {
     const entry = processes.get(id);
     if (entry) { entry.status = 'stopped'; entry.exitCode = -1; entry.signal = null; }
+    clearRuntimePidIfMatches(id, child.pid);
     console.error(`[guard] failed to start task ${id}: ${String(err)}`);
   });
   child.on('exit', (code, signal) => {
     const entry = processes.get(id);
     if (entry) { entry.status = 'stopped'; entry.exitCode = code; entry.signal = signal; }
+    clearRuntimePidIfMatches(id, child.pid);
   });
   processes.set(id, { child, status: 'running', command, cwd, env, startedAt: new Date().toISOString(), stdoutBuf, stderrBuf });
+  patchProject(id, { was_running_before_shutdown: true, runtime_pid: child.pid }, { skipUpdatedDate: true });
 
   const timeoutMs = 2000;
   const attempts = Math.max(2, Math.round(timeoutMs / 800));
@@ -212,9 +458,10 @@ async function shutdown(signal) {
     console.log(`Received ${signal}, shutting down tasks...`);
     const promises = [];
     for (const [id, entry] of processes.entries()) {
-      if (!entry || !isRunning(entry.child)) continue;
+      if (!entry) continue;
+      if (!isRunning(entry.child)) continue;
       promises.push(new Promise((resolve) => {
-        treeKill(entry.child.pid, 'SIGTERM', () => resolve(null));
+        treeKill(entry.child.pid, 'SIGTERM', () => { clearRuntimePidIfMatches(id, entry.child.pid); resolve(null); });
       }));
     }
     await Promise.all(promises);
@@ -231,30 +478,84 @@ async function shutdown(signal) {
   });
 });
 
+app.get('/api/command-config', (req, res) => {
+  const config = readCommandConfig();
+  const platform = getCurrentPlatform();
+  res.json({ config, currentPlatform: platform });
+});
+
+app.put('/api/command-config', (req, res) => {
+  const data = req.body || {};
+  if (!data.config) return res.status(400).json({ error: 'config is required' });
+  writeCommandConfig(data.config);
+  res.json({ ok: true });
+});
+
+app.post('/api/command-config/reset', (req, res) => {
+  const defaults = getDefaultCommandConfig();
+  writeCommandConfig(defaults);
+  res.json({ ok: true, config: defaults });
+});
+
 app.post('/api/projects/start', (req, res) => {
-  const { id, start_command, working_directory, environment_variables, startup_timeout_ms } = req.body || {};
+  const { id, start_command, working_directory, environment_variables, startup_timeout_ms, category, script_content } = req.body || {};
   if (!id || !start_command) return res.status(400).json({ error: 'id and start_command are required' });
   const existing = processes.get(id);
-  if (existing && isRunning(existing.child)) treeKill(existing.child.pid, 'SIGTERM');
-  const env = { ...process.env, ...((environment_variables && typeof environment_variables === 'object') ? environment_variables : {}) };
-  const command = start_command;
-  const child = spawn(command, { cwd: safeCwd(working_directory), env, shell: true });
+  if (existing && isTaskRunning(id)) {
+    const pid = existing.child ? existing.child.pid : null;
+    return res.json({ ok: true, pid, alreadyRunning: true });
+  }
+
+  const env = buildTaskEnv(environment_variables);
+  const cwd = safeCwd(working_directory);
+  const isFireAndForget = isFireAndForgetCategory(category);
+  let command;
+  let child;
+  if (category === 'shell' && script_content && String(script_content).trim()) {
+    command = `bash -s <${start_command || 'script'}>`;
+    child = spawn('bash', ['-s'], { cwd, env, shell: false });
+    child.stdin.end(String(script_content));
+  } else {
+    command = processCommandByCategory(start_command, category);
+    child = spawn(command, { cwd, env, shell: true });
+  }
   const stdoutBuf = ringBuffer(500); const stderrBuf = ringBuffer(500);
   child.stdout.on('data', (data) => stdoutBuf.push(data.toString()));
   child.stderr.on('data', (data) => stderrBuf.push(data.toString()));
   let responded = false;
-  const respondOk = () => { if (responded) return; responded = true; res.json({ ok: true, pid: child.pid }); };
+  const respondOk = (pid, alreadyRunning = false) => { if (responded) return; responded = true; res.json({ ok: true, pid, alreadyRunning }); };
   const respondFail = (message, code = null, signal = null) => { if (responded) return; responded = true; res.status(500).json({ ok: false, error: message, code, signal, logs: { stdout: stdoutBuf.get(), stderr: stderrBuf.get() } }); };
-  child.on('error', (err) => { const entry = processes.get(id); if (entry) { entry.status = 'stopped'; entry.exitCode = -1; entry.signal = null; } respondFail(`spawn error: ${String(err)}`); });
+  child.on('error', (err) => {
+    const entry = processes.get(id);
+    if (entry) { entry.status = 'stopped'; entry.exitCode = -1; entry.signal = null; }
+    clearRuntimePidIfMatches(id, child.pid);
+    respondFail(`spawn error: ${String(err)}`);
+  });
   child.on('exit', (code, signal) => {
     const entry = processes.get(id);
     if (entry) { entry.status = 'stopped'; entry.exitCode = code; entry.signal = signal; }
-    if (!responded) respondFail(`process exited with code ${code}${signal ? `, signal ${signal}` : ''}`, code, signal);
+    clearRuntimePidIfMatches(id, child.pid);
+    if (!responded) {
+      if (isFireAndForget && code === 0) {
+        patchProject(id, { was_running_before_shutdown: false, last_started: new Date().toISOString(), runtime_pid: null }, { skipUpdatedDate: true });
+        respondOk(null, false);
+        return;
+      }
+      respondFail(`process exited with code ${code}${signal ? `, signal ${signal}` : ''}`, code, signal);
+    }
   });
-  processes.set(id, { child, status: 'running', command, cwd: working_directory || process.cwd(), env, startedAt: new Date().toISOString(), stdoutBuf, stderrBuf });
-  patchProject(id, { was_running_before_shutdown: true });
+  processes.set(id, { child, status: 'running', command, cwd, env, startedAt: new Date().toISOString(), stdoutBuf, stderrBuf });
   const timeout = typeof startup_timeout_ms === 'number' && startup_timeout_ms > 0 ? startup_timeout_ms : 2000;
-  setTimeout(() => { if (responded) return; if (isRunning(child)) { console.log(`[task] started id=${id} pid=${child.pid} cmd=${command}`); respondOk(); } else respondFail('process not running after startup timeout'); }, timeout);
+  setTimeout(() => {
+    if (responded) return;
+    if (isRunning(child)) {
+      console.log(`[task] started id=${id} pid=${child.pid} cmd=${command}`);
+      patchProject(id, { was_running_before_shutdown: true, last_started: new Date().toISOString(), runtime_pid: child.pid }, { skipUpdatedDate: true });
+      respondOk(child.pid, false);
+    } else {
+      respondFail('process not running after startup timeout');
+    }
+  }, timeout);
 });
 
 app.post('/api/projects/stop', (req, res) => {
@@ -262,21 +563,24 @@ app.post('/api/projects/stop', (req, res) => {
   if (!id) return res.status(400).json({ error: 'id is required' });
   const spawnStopCommand = () => {
     if (!stop_command) return res.json({ ok: true, message: 'not running' });
-    const env = { ...process.env, ...((environment_variables && typeof environment_variables === 'object') ? environment_variables : {}) };
+    const env = buildTaskEnv(environment_variables);
     const child = spawn(stop_command, { cwd: safeCwd(working_directory), env, shell: true });
     const stdoutBuf = ringBuffer(200); const stderrBuf = ringBuffer(200);
     child.stdout.on('data', (data) => stdoutBuf.push(data.toString()));
     child.stderr.on('data', (data) => stderrBuf.push(data.toString()));
     child.on('error', (err) => { res.status(500).json({ ok: false, error: `stop_command spawn error: ${String(err)}`, logs: { stdout: stdoutBuf.get(), stderr: stderrBuf.get() } }); });
-    child.on('exit', (code, signal) => { if (code === 0) res.json({ ok: true, exitCode: code, signal, logs: { stdout: stdoutBuf.get(), stderr: stderrBuf.get() } }); else res.status(500).json({ ok: false, error: `stop_command exited with code ${code}${signal ? `, signal ${signal}` : ''}`, exitCode: code, signal, logs: { stdout: stdoutBuf.get(), stderr: stderrBuf.get() } }); });
+    child.on('exit', (code, signal) => { if (code === 0) { patchProject(id, { runtime_pid: null }, { skipUpdatedDate: true }); res.json({ ok: true, exitCode: code, signal, logs: { stdout: stdoutBuf.get(), stderr: stderrBuf.get() } }); } else res.status(500).json({ ok: false, error: `stop_command exited with code ${code}${signal ? `, signal ${signal}` : ''}`, exitCode: code, signal, logs: { stdout: stdoutBuf.get(), stderr: stderrBuf.get() } }); });
   };
   const entry = processes.get(id);
   if (!entry || !isRunning(entry.child)) {
+    patchProject(id, { runtime_pid: null }, { skipUpdatedDate: true });
     return spawnStopCommand();
   }
   treeKill(entry.child.pid, 'SIGTERM', (err) => {
     if (err) return spawnStopCommand();
     entry.status = 'stopped';
+    clearRuntimePidIfMatches(id, entry.child.pid);
+    processes.delete(id);
     console.log(`[task] stopped id=${id} pid=${entry.child.pid}`);
     res.json({ ok: true });
   });
@@ -286,7 +590,7 @@ app.get('/api/projects/status/:id', (req, res) => {
   const { id } = req.params;
   const entry = processes.get(id);
   const running = entry ? isRunning(entry.child) : false;
-  const pid = running ? (entry?.child?.pid || null) : null;
+  const pid = running ? (entry.child.pid || null) : null;
   const status = running ? 'running' : 'stopped';
   res.json({ running, status, pid });
 });
@@ -310,7 +614,17 @@ app.get('/api/processes/by-port/:port', async (req, res) => {
   const out = await collectOutput('lsof', ['-n', '-P', '-i', `:${portNum}`]);
   const lines = String(out.stdout || '').split('\n').slice(1).map((l) => l.trim()).filter(Boolean);
   const items = [];
-  for (const l of lines) { const parts = l.split(/\s+/); if (parts.length < 2) continue; const command = parts[0]; const pid = parseInt(parts[1], 10); if (!Number.isFinite(pid)) continue; const name = parts[parts.length - 1] || ''; items.push({ pid, command, name }); }
+  for (const l of lines) {
+    const parts = l.split(/\s+/);
+    if (parts.length < 9) continue;
+    const command = parts[0];
+    const pid = parseInt(parts[1], 10);
+    if (!Number.isFinite(pid)) continue;
+    const name = parts.slice(8).join(' ');
+    const statusMatch = name.match(/\((\w+)\)$/);
+    const status = statusMatch ? statusMatch[1] : '';
+    items.push({ pid, command, name, status });
+  }
   res.json(items);
 });
 // Persistent project metadata CRUD
@@ -318,13 +632,14 @@ app.get('/api/projects', (req, res) => { res.json(readProjectsFile()); });
 app.post('/api/projects', (req, res) => {
   const data = req.body || {};
   const now = new Date().toISOString();
-  const project = {
-    id: typeof data.id === 'string' && data.id ? data.id : genId(),
-    name: '', description: '', group: '', category: 'other', working_directory: '', start_command: '', stop_command: '',
-    port: undefined, environment_variables: {}, auto_restart: false, max_restarts: 5, restart_interval: 15,
-    scheduled_start: '', scheduled_stop: '', restart_count: 0, manual_stopped: false, was_running_before_shutdown: false,
-    notes: '', order_index: 0, created_date: now, updated_date: now, last_started: undefined, ...data,
-  };
+	  const project = {
+	    id: typeof data.id === 'string' && data.id ? data.id : genId(),
+	    name: '', description: '', group: '', category: 'other', working_directory: '', start_command: '', stop_command: '',
+	    port: undefined, environment_variables: {}, auto_restart: false, max_restarts: 5, restart_interval: 15,
+	    scheduled_start: '', scheduled_stop: '', restart_count: 0, manual_stopped: false, was_running_before_shutdown: false,
+	    runtime_pid: null,
+	    notes: '', order_index: 0, created_date: now, updated_date: now, last_started: undefined, ...data,
+	  };
   const items = readProjectsFile();
   const idx = items.findIndex(p => p.id === project.id);
   if (idx !== -1) { return res.json(items[idx]); }
@@ -346,6 +661,7 @@ app.delete('/api/projects/:id', async (req, res) => {
       await new Promise((resolve) => {
         treeKill(entry.child.pid, 'SIGTERM', () => resolve(null));
       });
+      clearRuntimePidIfMatches(id, entry.child.pid);
     }
     processes.delete(id);
   } catch {
@@ -377,15 +693,26 @@ app.post('/api/processes/kill', (req, res) => {
 });
 
 app.post('/api/projects/restart', async (req, res) => {
-  const { id, start_command, stop_command, working_directory, environment_variables, startup_timeout_ms } = req.body || {};
+  const { id, start_command, stop_command, working_directory, environment_variables, startup_timeout_ms, category, script_content } = req.body || {};
   if (!id) return res.status(400).json({ error: 'id is required' });
   const entry = processes.get(id);
-  const env = { ...process.env, ...((environment_variables && typeof environment_variables === 'object') ? environment_variables : {}) };
+  const env = buildTaskEnv(environment_variables);
   const cwd = safeCwd(working_directory);
-  const startCmd = start_command || entry?.command; if (!startCmd) return res.status(400).json({ error: 'start_command is required' });
+  const rawStartCmd = start_command || entry?.command;
+  if (!rawStartCmd) return res.status(400).json({ error: 'start_command is required' });
+  let startCmd;
+  let startProcessMode = 'shell';
+  if (category === 'shell' && script_content && String(script_content).trim()) {
+    startCmd = `bash -s <${rawStartCmd || 'script'}>`;
+    startProcessMode = 'stdin';
+  } else {
+    startCmd = processCommandByCategory(rawStartCmd, category);
+  }
+  const isFireAndForget = isFireAndForgetCategory(category);
   async function stopExisting() {
     if (entry && isRunning(entry.child)) {
       await new Promise((resolve) => { treeKill(entry.child.pid, 'SIGTERM', () => resolve(null)); });
+      clearRuntimePidIfMatches(id, entry.child.pid);
     }
     if (stop_command) {
       const child = spawn(stop_command, { cwd, env, shell: true });
@@ -396,20 +723,35 @@ app.post('/api/projects/restart', async (req, res) => {
     }
   }
   await stopExisting();
-  const child = spawn(startCmd, { cwd, env, shell: true }); const stdoutBuf = ringBuffer(500); const stderrBuf = ringBuffer(500);
+  const child = startProcessMode === 'stdin'
+    ? spawn('bash', ['-s'], { cwd, env, shell: false })
+    : spawn(startCmd, { cwd, env, shell: true });
+  if (startProcessMode === 'stdin') child.stdin.end(String(script_content));
+  const stdoutBuf = ringBuffer(500); const stderrBuf = ringBuffer(500);
   child.stdout.on('data', (data) => stdoutBuf.push(data.toString())); child.stderr.on('data', (data) => stderrBuf.push(data.toString()));
   let responded = false;
-  const respondOk = () => { if (responded) return; responded = true; res.json({ ok: true, pid: child.pid }); };
+  const respondOk = (pid, alreadyRunning = false) => { if (responded) return; responded = true; res.json({ ok: true, pid, alreadyRunning }); };
   const respondFail = (message, code = null, signal = null) => { if (responded) return; responded = true; res.status(500).json({ ok: false, error: message, code, signal, logs: { stdout: stdoutBuf.get(), stderr: stderrBuf.get() } }); };
-  child.on('error', (err) => { const e = processes.get(id); if (e) { e.status = 'stopped'; e.exitCode = -1; e.signal = null; } respondFail(String(err)); });
+  child.on('error', (err) => {
+    const e = processes.get(id); if (e) { e.status = 'stopped'; e.exitCode = -1; e.signal = null; }
+    clearRuntimePidIfMatches(id, child.pid);
+    respondFail(String(err));
+  });
   child.on('exit', (code, signal) => {
     const e = processes.get(id); if (e) { e.status = 'stopped'; e.exitCode = code; e.signal = signal; }
-    if (!responded) respondFail(`process exited with code ${code}${signal ? `, signal ${signal}` : ''}`, code, signal);
+    clearRuntimePidIfMatches(id, child.pid);
+    if (!responded) {
+      if (isFireAndForget && code === 0) {
+        patchProject(id, { was_running_before_shutdown: false, last_started: new Date().toISOString(), runtime_pid: null }, { skipUpdatedDate: true });
+        respondOk(null, false);
+        return;
+      }
+      respondFail(`process exited with code ${code}${signal ? `, signal ${signal}` : ''}`, code, signal);
+    }
   });
   processes.set(id, { child, status: 'running', command: startCmd, cwd, env, startedAt: new Date().toISOString(), stdoutBuf, stderrBuf });
-  patchProject(id, { was_running_before_shutdown: true });
   const timeout = typeof startup_timeout_ms === 'number' && startup_timeout_ms > 0 ? startup_timeout_ms : 2000;
-  setTimeout(() => { if (responded) return; if (isRunning(child)) { console.log(`[task] restarted id=${id} pid=${child.pid} cmd=${startCmd}`); respondOk(); } else respondFail('process not running after startup timeout'); }, timeout);
+  setTimeout(() => { if (responded) return; if (isRunning(child)) { console.log(`[task] restarted id=${id} pid=${child.pid} cmd=${startCmd}`); patchProject(id, { was_running_before_shutdown: true, last_started: new Date().toISOString(), runtime_pid: child.pid }, { skipUpdatedDate: true }); respondOk(child.pid, false); } else respondFail('process not running after startup timeout'); }, timeout);
 });
 
 const PORT = process.env.PORT || 3001;
@@ -507,6 +849,7 @@ function startServerWithFallback() {
   };
   tryListen();
 }
+resetPersistedRuntimeStateOnBoot();
 setupGuardian();
 startServerWithFallback();
 function baseRunDir() {
@@ -518,4 +861,13 @@ function safeCwd(working_directory) {
   const candidate = path.isAbsolute(working_directory) ? working_directory : path.join(base, working_directory);
   try { const st = fs.statSync(candidate); if (st && st.isDirectory()) return candidate; } catch {}
   return base;
+}
+
+function buildTaskEnv(environment_variables) {
+  const custom = (environment_variables && typeof environment_variables === 'object') ? environment_variables : {};
+  const env = { ...process.env, ...custom };
+  if (!Object.prototype.hasOwnProperty.call(custom, 'PORT')) {
+    delete env.PORT;
+  }
+  return env;
 }

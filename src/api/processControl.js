@@ -22,6 +22,7 @@ export async function startProject(project) {
       working_directory: project.working_directory,
       environment_variables: project.environment_variables,
       port: project.port,
+      category: project.category,
       startup_timeout_ms: 2000,
     }),
   });
@@ -82,6 +83,8 @@ export async function restartProject(project) {
         stop_command: project.stop_command,
         working_directory: project.working_directory,
         environment_variables: project.environment_variables,
+        port: project.port,
+        category: project.category,
         startup_timeout_ms: 2000,
       }
     : null;

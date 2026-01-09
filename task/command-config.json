@@ -1,0 +1,124 @@
+{
+  "windows": {
+    "categories": [
+      {
+        "value": "exe",
+        "label": "EXE 程序"
+      },
+      {
+        "value": "bat",
+        "label": "BAT 批处理"
+      },
+      {
+        "value": "powershell",
+        "label": "PowerShell 脚本"
+      },
+      {
+        "value": "other",
+        "label": "其他"
+      }
+    ],
+    "commandTemplates": {
+      "exe": {
+        "pattern": "{cmd}",
+        "description": "直接执行 EXE 程序"
+      },
+      "bat": {
+        "pattern": "cmd /c {cmd}",
+        "description": "使用 cmd /c 执行批处理"
+      },
+      "powershell": {
+        "pattern": "powershell -ExecutionPolicy Bypass -File {cmd}",
+        "description": "使用 PowerShell 执行脚本"
+      },
+      "other": {
+        "pattern": "{cmd}",
+        "description": "直接执行命令"
+      }
+    }
+  },
+  "macos": {
+    "categories": [
+      {
+        "value": "shell",
+        "label": "Shell 脚本"
+      },
+      {
+        "value": "executable",
+        "label": "可执行程序"
+      },
+      {
+        "value": "app",
+        "label": "应用程序"
+      },
+      {
+        "value": "python",
+        "label": "Python 脚本"
+      },
+      {
+        "value": "other",
+        "label": "其他"
+      }
+    ],
+    "commandTemplates": {
+      "shell": {
+        "pattern": "bash {cmd}",
+        "description": "使用 bash 执行 Shell 脚本"
+      },
+      "executable": {
+        "pattern": "chmod +x {cmd} 2>/dev/null; {cmd}",
+        "description": "添加执行权限后运行"
+      },
+      "app": {
+        "pattern": "open -a \"{cmd}\"",
+        "description": "使用 open -a 打开应用程序"
+      },
+      "python": {
+        "pattern": "conda run -n DA Python {cmd} ",
+        "description": "优先使用 python3 执行"
+      },
+      "other": {
+        "pattern": "{cmd}",
+        "description": "直接执行命令"
+      }
+    }
+  },
+  "linux": {
+    "categories": [
+      {
+        "value": "shell",
+        "label": "Shell 脚本"
+      },
+      {
+        "value": "executable",
+        "label": "可执行程序"
+      },
+      {
+        "value": "python",
+        "label": "Python 脚本"
+      },
+      {
+        "value": "other",
+        "label": "其他"
+      }
+    ],
+    "commandTemplates": {
+      "shell": {
+        "pattern": "bash {cmd}",
+        "description": "使用 bash 执行 Shell 脚本"
+      },
+      "executable": {
+        "pattern": "chmod +x {cmd} 2>/dev/null; {cmd}",
+        "description": "添加执行权限后运行"
+      },
+      "python": {
+        "pattern": "python3 {cmd} 2>/dev/null || python {cmd}",
+        "description": "优先使用 python3 执行"
+      },
+      "other": {
+        "pattern": "{cmd}",
+        "description": "直接执行命令"
+      }
+    }
+  }
+}

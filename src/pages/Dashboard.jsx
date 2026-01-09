@@ -5,7 +5,7 @@ import { showSuccess, showError, showInfo, MESSAGES } from "@/utils/notification
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Plus, Search, LayoutGrid, List, Layers } from "lucide-react";
+import { Plus, Search, LayoutGrid, List, Layers, Settings, Terminal, Network } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Select,
@@ -17,6 +17,7 @@ import {
 
 import ProjectCard from "../components/projects/ProjectCard";
 import ProjectForm from "../components/projects/ProjectForm";
+import CommandConfig from "./CommandConfig";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -31,6 +32,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 
 export default function Dashboard() {
   const [showForm, setShowForm] = useState(false);
+  const [showCommandConfig, setShowCommandConfig] = useState(false);
   const [editingProject, setEditingProject] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
@@ -232,12 +234,14 @@ export default function Dashboard() {
     if (editingProject) {
       updateMutation.mutate({ id: editingProject.id, data });
     } else {
-      // 新建任务时端口号必填且需合法
+      // 端口号为可选，如果填写了需要验证合法性
       const port = data?.port;
-      const valid = Number.isInteger(port) && port >= 1 && port <= 65535;
-      if (!valid) {
-        showError('端口号必填', '请填写 1-65535 的有效端口号', 2500);
-        return;
+      if (port !== '' && port !== undefined && port !== null) {
+        const valid = Number.isInteger(port) && port >= 1 && port <= 65535;
+        if (!valid) {
+          showError('端口号格式错误', '请填写 1-65535 的有效端口号，或留空', 2500);
+          return;
+        }
       }
       createMutation.mutate(data);
     }
@@ -249,7 +253,7 @@ export default function Dashboard() {
         showError('无法启动', '请先在任务设置中填写启动命令（start_command）');
         return;
       }
-      // 用户主动点击“启动”视为重新允许守护，将 manual_stopped 置为 false
+      // 用户主动点击"启动"视为重新允许守护，将 manual_stopped 置为 false
       updateMutation.mutate({ id: project.id, data: { manual_stopped: false } });
       showInfo('正在启动…', `${project.name} 正在启动并进行健康检查`, 1000);
 
@@ -260,6 +264,21 @@ export default function Dashboard() {
         const lastErr = (startResult.logs?.stderr || []).slice(-10).join('\n');
         await stopProcess(project.id).catch(() => {});
         showError(MESSAGES.START_ERROR, `已终止进程。${lastErr || startResult.error || '未知错误'}`, 4000);
+        return;
+      }
+
+      // 检查是否是接管旧进程
+      if (startResult && startResult.alreadyRunning) {
+        updateMutation.mutate({
+          id: project.id,
+          data: {
+            last_started: new Date().toISOString(),
+            manual_stopped: false,
+            restart_count: 0,
+          },
+        });
+        showInfo('已接管旧进程', `${project.name} 检测到程序已在运行，已自动接管（PID: ${startResult.pid || '未知'}）`, 3000);
+        await refreshRuntimeFor(project.id);
         return;
       }
 
@@ -319,6 +338,21 @@ export default function Dashboard() {
         const lastErr = (startResult.logs?.stderr || []).slice(-10).join('\n');
         await stopProcess(project).catch(() => {});
         showError(MESSAGES.RESTART_ERROR, `已终止进程。${lastErr || startResult.error || '未知错误'}`, 4000);
+        return;
+      }
+
+      // 检查是否是接管旧进程
+      if (startResult && startResult.alreadyRunning) {
+        updateMutation.mutate({
+          id: project.id,
+          data: {
+            last_started: new Date().toISOString(),
+            manual_stopped: false,
+            restart_count: 0,
+          },
+        });
+        showInfo('已接管旧进程', `${project.name} 检测到程序已在运行，已自动接管（PID: ${startResult.pid || '未知'}）`, 3000);
+        await refreshRuntimeFor(project.id);
         return;
       }
 
@@ -477,6 +511,10 @@ export default function Dashboard() {
     // 不做自动干预，只依赖后端状态接口（/api/projects/status）进行展示和手动控制
   }, [projects]);
 
+  if (showCommandConfig) {
+    return <CommandConfig onBack={() => setShowCommandConfig(false)} />;
+  }
+
   if (showForm) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 p-6">
@@ -505,13 +543,15 @@ export default function Dashboard() {
               </h1>
               <p className="text-gray-600 mt-1">管理和监控你的本地脚本</p>
             </div>
-            <Button
-              onClick={() => setShowForm(true)}
-              className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700"
-            >
-              <Plus className="w-4 h-4 mr-2" />
-              新建任务
-            </Button>
+            <div className="flex gap-2">
+              <Button
+                onClick={() => setShowForm(true)}
+                className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700"
+              >
+                <Plus className="w-4 h-4 mr-2" />
+                新建任务
+              </Button>
+            </div>
           </div>
         </div>
       </div>
@@ -520,10 +560,19 @@ export default function Dashboard() {
         {/* 右侧 Toast 自动提示，顶部不再显示状态卡片 */}
         <div className="flex gap-2 mb-4">
           <Button variant="outline" onClick={() => setProcQueryOpen(true)}>
-            查询任务进程
+            <Terminal className="w-4 h-4 mr-2" />
+            查询进程
           </Button>
           <Button variant="outline" onClick={() => setPortQueryOpen(true)}>
+            <Network className="w-4 h-4 mr-2" />
             查询端口
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => setShowCommandConfig(true)}
+          >
+            <Settings className="w-4 h-4 mr-2" />
+            命令管理
           </Button>
         </div>
         {/* 统计卡片 */}
@@ -766,7 +815,7 @@ export default function Dashboard() {
       <Dialog open={procQueryOpen} onOpenChange={setProcQueryOpen}>
         <DialogContent className="sm:max-w-xl">
           <DialogHeader>
-            <DialogTitle>查询任务进程</DialogTitle>
+            <DialogTitle>查询进程</DialogTitle>
             <DialogDescription>输入任务名称关键词</DialogDescription>
           </DialogHeader>
           <div className="flex gap-2">
@@ -824,7 +873,7 @@ export default function Dashboard() {
         <DialogContent className="sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>查询端口</DialogTitle>
-            <DialogDescription>输入端口号</DialogDescription>
+            <DialogDescription>输入端口号查看占用情况</DialogDescription>
           </DialogHeader>
           <div className="flex gap-2">
             <Input
@@ -840,33 +889,36 @@ export default function Dashboard() {
             />
             <Button onClick={runPortQuery}>查询</Button>
           </div>
-          <div className="grid grid-cols-[120px_100px_1fr_80px] items-center px-2 py-2 text-xs text-gray-500">
+          <div className="grid grid-cols-[70px_1fr_80px_70px] items-center px-2 py-2 text-xs text-gray-500 border-b">
             <div>PID</div>
             <div>进程名</div>
-            <div>详情</div>
+            <div>状态</div>
             <div className="text-right">操作</div>
           </div>
-          <div className="space-y-2 max-h-72 overflow-auto">
+          <div className="space-y-1 max-h-80 overflow-auto">
             {portLoading && (
-              <div className="text-sm text-gray-500">查询中…</div>
+              <div className="text-sm text-gray-500 py-4 text-center">查询中…</div>
             )}
             {!portLoading && portResults.length === 0 && (
-              <div className="text-sm text-gray-500">无占用记录</div>
+              <div className="text-sm text-gray-500 py-4 text-center">无占用记录</div>
             )}
-            {portResults.map((item) => (
+            {portResults.map((item, idx) => (
               <div
-                key={`${item.pid}-${item.name || item.command}`}
-                className="grid grid-cols-[120px_100px_1fr_80px] items-center gap-2 px-2 py-2 rounded text-sm hover:bg-accent"
+                key={`${item.pid}-${idx}`}
+                className="grid grid-cols-[70px_1fr_80px_70px] items-center gap-2 px-2 py-2 rounded text-sm hover:bg-accent"
               >
-                <div className="font-mono">{item.pid}</div>
-                <div className="truncate font-mono">
-                  {item.command ? String(item.command).split(/\s+/)[0] : ''}
+                <div className="font-mono text-blue-600">{item.pid}</div>
+                <div className="font-mono font-medium truncate" title={item.command}>
+                  {item.command}
                 </div>
-                <div
-                  className="truncate font-mono"
-                  title={`${item.command || ''}${item.name ? ` ${item.name}` : ''}`}
-                >
-                  {item.command}{item.name ? ` ${item.name}` : ''}
+                <div>
+                  <span className={`px-1.5 py-0.5 rounded text-xs ${
+                    item.status === 'LISTEN' ? 'bg-green-100 text-green-700' :
+                    item.status === 'ESTABLISHED' ? 'bg-blue-100 text-blue-700' :
+                    item.status ? 'bg-gray-100 text-gray-600' : ''
+                  }`}>
+                    {item.status || '-'}
+                  </span>
                 </div>
                 <div className="text-right">
                   <Button size="sm" variant="destructive" onClick={() => handleStopFromQuery(item.pid, 'port')}>停止</Button>
