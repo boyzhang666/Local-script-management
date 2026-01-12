@@ -34,6 +34,21 @@ const statusConfig = {
   stopped: { label: "已停止", color: "bg-gray-400", textColor: "text-gray-700" },
 };
 
+/**
+ * 从中间截断路径，保留首尾部分
+ * @param {string} path - 完整路径
+ * @param {number} maxLen - 最大显示长度
+ * @returns {string} 截断后的路径
+ */
+function truncatePath(path, maxLen = 60) {
+  if (!path || path.length <= maxLen) return path;
+  const ellipsis = '...';
+  const availableLen = maxLen - ellipsis.length;
+  const headLen = Math.ceil(availableLen * 0.4);
+  const tailLen = availableLen - headLen;
+  return path.slice(0, headLen) + ellipsis + path.slice(-tailLen);
+}
+
 export default function ProjectCard({
   project,
   onStart,
@@ -204,10 +219,10 @@ export default function ProjectCard({
             <div className="mt-2 text-xs text-gray-600 space-y-1">
               {/* 第一行：文件路径  任务组  端口  守护进程 */}
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-                <div className="flex items-center gap-1">
+                <div className="flex items-center gap-1" title={project.working_directory || "未设置路径"}>
                   <Folder className="w-3 h-3" />
-                  <span className="truncate max-w-[260px] sm:max-w-[320px] md:max-w-[420px]">
-                    {project.working_directory || "未设置路径"}
+                  <span>
+                    {truncatePath(project.working_directory, 70) || "未设置路径"}
                   </span>
                 </div>
                 <div className="flex items-center gap-1">
@@ -310,10 +325,10 @@ export default function ProjectCard({
           {/* 网格信息：行列对齐 */}
           <div className="grid grid-cols-2 gap-1 text-xs text-gray-600">
             {/* 第一行：文件路径（独占一行） */}
-            <div className="flex items-center gap-1 col-span-2">
+            <div className="flex items-center gap-1 col-span-2" title={project.working_directory || "未设置路径"}>
               <Folder className="w-3 h-3" />
-              <span className="truncate">
-                {project.working_directory || "未设置路径"}
+              <span>
+                {truncatePath(project.working_directory, 50) || "未设置路径"}
               </span>
             </div>
 
