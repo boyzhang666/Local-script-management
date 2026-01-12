@@ -134,8 +134,9 @@ export default function Dashboard() {
       } catch { /* ignore */ }
     };
     const timer = setInterval(fetchStatuses, 5000);
+    fetchStatuses(); // 初始化时立即执行一次
     return () => clearInterval(timer);
-  }, [projects, runtimeStatus]);
+  }, [projects]); // 移除 runtimeStatus 依赖，避免定时器频繁重启
 
   // 新增：项目重启后的状态自愈机制
   useEffect(() => {
