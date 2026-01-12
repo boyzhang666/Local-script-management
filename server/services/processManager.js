@@ -11,6 +11,47 @@ import { normalizePid, normalizePort, isPidAlive, killProcessTree } from '../lib
 const processes = new Map();
 const guardianState = new Map();
 
+function isWindows() {
+  return process.platform === 'win32';
+}
+
+/**
+ * Get shell executable and args for spawning commands
+ * Uses interactive shell to ensure full environment initialization (conda/mamba)
+ */
+function getShellConfig() {
+  if (isWindows()) {
+    return { shell: true };
+  }
+  // Use interactive shell to load .zshrc/.bashrc where conda/mamba is initialized
+  // -i: interactive mode (loads .zshrc/.bashrc)
+  // -c: execute command
+  const userShell = process.env.SHELL || '/bin/bash';
+  return {
+    shell: false,
+    executable: userShell,
+    args: ['-i', '-c']
+  };
+}
+
+/**
+ * Spawn a command using interactive shell to ensure proper environment initialization
+ */
+function spawnWithShell(command, options = {}) {
+  const shellConfig = getShellConfig();
+
+  if (shellConfig.shell) {
+    // Windows: use default shell behavior
+    return spawn(command, { ...options, shell: true });
+  }
+
+  // Unix-like: use interactive shell with -i -c
+  return spawn(shellConfig.executable, [...shellConfig.args, command], {
+    ...options,
+    shell: false
+  });
+}
+
 function isTaskRunning(id) {
   const entry = processes.get(id);
   if (!entry) return false;
@@ -90,7 +131,7 @@ export async function startTask(params = {}) {
   console.log(`[task] processing command: original="${start_command}" category="${category}" final="${command}"`);
   const cwd = safeCwd(working_directory || persisted?.working_directory);
   const isFireAndForget = isFireAndForgetCategory(category);
-  const child = spawn(command, { cwd, env, shell: true });
+  const child = spawnWithShell(command, { cwd, env });
 
   const stdoutBuf = ringBuffer(500);
   const stderrBuf = ringBuffer(500);
@@ -194,7 +235,7 @@ export async function stopTask(params = {}) {
     if (!stop_command) return resolve(null);
     const stdoutBuf = ringBuffer(200);
     const stderrBuf = ringBuffer(200);
-    const child = spawn(stop_command, { cwd, env, shell: true });
+    const child = spawnWithShell(stop_command, { cwd, env });
     child.stdout.on('data', (data) => stdoutBuf.push(data.toString()));
     child.stderr.on('data', (data) => stderrBuf.push(data.toString()));
     child.on('error', (err) => resolve({ ok: false, error: `stop_command spawn error: ${String(err)}`, logs: { stdout: stdoutBuf.get(), stderr: stderrBuf.get() } }));
@@ -306,7 +347,7 @@ export async function restartTask(params = {}) {
       clearRuntimePidIfMatches(id, entry.child.pid);
     }
     if (stop_command) {
-      const child = spawn(stop_command, { cwd, env, shell: true });
+      const child = spawnWithShell(stop_command, { cwd, env });
       const stdoutBuf = ringBuffer(200);
       const stderrBuf = ringBuffer(200);
       child.stdout.on('data', (d) => stdoutBuf.push(d.toString()));
@@ -319,7 +360,7 @@ export async function restartTask(params = {}) {
 
   const stdoutBuf = ringBuffer(500);
   const stderrBuf = ringBuffer(500);
-  const child = spawn(startCmd, { cwd, env, shell: true });
+  const child = spawnWithShell(startCmd, { cwd, env });
   child.stdout.on('data', (data) => stdoutBuf.push(data.toString()));
   child.stderr.on('data', (data) => stderrBuf.push(data.toString()));
 
@@ -481,7 +522,7 @@ async function guardianAttemptStart(project) {
   const env = buildTaskEnv(project.environment_variables);
   const command = processCommandByCategory(start_command, project.category);
   const cwd = safeCwd(project.working_directory);
-  const child = spawn(command, { cwd, env, shell: true });
+  const child = spawnWithShell(command, { cwd, env });
   const stdoutBuf = ringBuffer(500);
   const stderrBuf = ringBuffer(500);
   child.stdout.on('data', (data) => stdoutBuf.push(data.toString()));
