@@ -11,8 +11,8 @@ export function writeProjectsFile(items) {
       return rest;
     });
     fs.writeFileSync(taskFilePath(), JSON.stringify(sanitized, null, 2));
-  } catch {
-    /* ignore */
+  } catch (err) {
+    console.error('[storage] Failed to write tasks.json:', String(err));
   }
 }
 
@@ -22,7 +22,11 @@ export function readProjectsFile() {
     const arr = JSON.parse(raw);
     const items = Array.isArray(arr) ? arr : [];
     return dedupeProjects(items);
-  } catch {
+  } catch (err) {
+    // 第一次运行或任务文件损坏时，返回空任务列表
+    if (err.code !== 'ENOENT') {
+      console.error('[storage] Failed to read tasks.json:', String(err));
+    }
     return [];
   }
 }
