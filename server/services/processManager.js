@@ -77,7 +77,7 @@ function clearRuntimePidIfMatches(id, pid) {
 }
 
 export async function startTask(params = {}) {
-  const { id, start_command, working_directory, environment_variables, startup_timeout_ms, category, port } = params;
+  const { id, start_command, working_directory, environment_variables, startup_timeout_ms, category, port, script_content } = params;
   if (!id || !start_command) {
     return { ok: false, status: 400, body: { error: 'id and start_command are required' } };
   }
@@ -127,11 +127,19 @@ export async function startTask(params = {}) {
   }
 
   const env = buildTaskEnv(environment_variables || persisted?.environment_variables);
-  const command = processCommandByCategory(start_command, category);
-  console.log(`[task] processing command: original="${start_command}" category="${category}" final="${command}"`);
   const cwd = safeCwd(working_directory || persisted?.working_directory);
   const isFireAndForget = isFireAndForgetCategory(category);
-  const child = spawnWithShell(command, { cwd, env });
+  let command;
+  let child;
+  if (category === 'shell' && script_content && String(script_content).trim()) {
+    command = `bash -s <${start_command || 'script'}>`;
+    child = spawn('bash', ['-s'], { cwd, env, shell: false });
+    child.stdin.end(String(script_content));
+  } else {
+    command = processCommandByCategory(start_command, category);
+    child = spawnWithShell(command, { cwd, env });
+  }
+  console.log(`[task] processing command: original="${start_command}" category="${category}" final="${command}"`);
 
   const stdoutBuf = ringBuffer(500);
   const stderrBuf = ringBuffer(500);
@@ -292,7 +300,7 @@ export async function stopTask(params = {}) {
 }
 
 export async function restartTask(params = {}) {
-  const { id, start_command, stop_command, working_directory, environment_variables, startup_timeout_ms, category, port } = params;
+  const { id, start_command, stop_command, working_directory, environment_variables, startup_timeout_ms, category, port, script_content } = params;
   if (!id) return { ok: false, status: 400, body: { error: 'id is required' } };
   const entry = processes.get(id);
   const project = getProjectById(id);
@@ -301,8 +309,8 @@ export async function restartTask(params = {}) {
   const rawStartCmd = start_command || project?.start_command || entry?.command;
   if (!rawStartCmd) return { ok: false, status: 400, body: { error: 'start_command is required' } };
 
-  const startCmd = processCommandByCategory(rawStartCmd, category);
-  console.log(`[task] restart processing command: original="${rawStartCmd}" category="${category}" final="${startCmd}"`);
+  let startCmd;
+  console.log(`[task] restart processing command: original="${rawStartCmd}" category="${category}"`);
   const isFireAndForget = isFireAndForgetCategory(category);
 
   const projectPort = normalizePort(port ?? project?.port);
@@ -360,7 +368,16 @@ export async function restartTask(params = {}) {
 
   const stdoutBuf = ringBuffer(500);
   const stderrBuf = ringBuffer(500);
-  const child = spawnWithShell(startCmd, { cwd, env });
+  let child;
+  if (category === 'shell' && script_content && String(script_content).trim()) {
+    startCmd = `bash -s <${rawStartCmd || 'script'}>`;
+    child = spawn('bash', ['-s'], { cwd, env, shell: false });
+    child.stdin.end(String(script_content));
+  } else {
+    startCmd = processCommandByCategory(rawStartCmd, category);
+    child = spawnWithShell(startCmd, { cwd, env });
+  }
+  console.log(`[task] restart final command: "${startCmd}"`);
   child.stdout.on('data', (data) => stdoutBuf.push(data.toString()));
   child.stderr.on('data', (data) => stderrBuf.push(data.toString()));
 
@@ -520,9 +537,17 @@ async function guardianAttemptStart(project) {
   }
 
   const env = buildTaskEnv(project.environment_variables);
-  const command = processCommandByCategory(start_command, project.category);
   const cwd = safeCwd(project.working_directory);
-  const child = spawnWithShell(command, { cwd, env });
+  let command;
+  let child;
+  if (project.category === 'shell' && project.script_content && String(project.script_content).trim()) {
+    command = `bash -s <${start_command || 'script'}>`;
+    child = spawn('bash', ['-s'], { cwd, env, shell: false });
+    child.stdin.end(String(project.script_content));
+  } else {
+    command = processCommandByCategory(start_command, project.category);
+    child = spawnWithShell(command, { cwd, env });
+  }
   const stdoutBuf = ringBuffer(500);
   const stderrBuf = ringBuffer(500);
   child.stdout.on('data', (data) => stdoutBuf.push(data.toString()));

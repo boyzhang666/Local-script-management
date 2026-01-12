@@ -263,8 +263,9 @@ export default function Dashboard() {
       // 后端早期校验：若启动命令在启动窗口内失败，返回真实错误和日志
       if (startResult && startResult.ok === false) {
         const lastErr = (startResult.logs?.stderr || []).slice(-10).join('\n');
-        await stopProcess(project.id).catch(() => {});
-        showError(MESSAGES.START_ERROR, `已终止进程。${lastErr || startResult.error || '未知错误'}`, 4000);
+        // startResult.ok === false 表示后端未成功启动进程（或进程已在启动窗口内退出），无需在前端主动 stop，
+        // 避免误杀旧 PID / 误导用户为“已终止进程”。
+        showError(MESSAGES.START_ERROR, `${lastErr || startResult.error || '未知错误'}`, 4000);
         return;
       }
 
@@ -337,8 +338,7 @@ export default function Dashboard() {
 
       if (startResult && startResult.ok === false) {
         const lastErr = (startResult.logs?.stderr || []).slice(-10).join('\n');
-        await stopProcess(project).catch(() => {});
-        showError(MESSAGES.RESTART_ERROR, `已终止进程。${lastErr || startResult.error || '未知错误'}`, 4000);
+        showError(MESSAGES.RESTART_ERROR, `${lastErr || startResult.error || '未知错误'}`, 4000);
         return;
       }
 

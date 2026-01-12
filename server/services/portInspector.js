@@ -89,6 +89,15 @@ async function windowsProcessesByPort(portNum) {
 
 async function unixProcessesByPort(portNum) {
   const out = await collectOutput('lsof', ['-n', '-P', '-i', `:${portNum}`]);
+  // lsof exits with code 1 when there are no matches (i.e., port not in use).
+  // Treat that case as "no processes", not an error.
+  if (out.code === 1 && !String(out.stdout || '').trim()) {
+    const stderr = String(out.stderr || '').trim();
+    if (!stderr) return [];
+    // If lsof failed to spawn / is missing, surface it as an error.
+    if (/ENOENT|spawn|not found/i.test(stderr)) throw new Error(stderr);
+    return [];
+  }
   if (out.code !== 0) throw new Error(out.stderr || 'lsof failed');
   const lines = String(out.stdout || '').split('\n').slice(1).map((l) => l.trim()).filter(Boolean);
   const items = [];

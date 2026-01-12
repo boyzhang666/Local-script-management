@@ -24,10 +24,32 @@ if [ ! -f "package.json" ]; then
     exit 1
 fi
 
-# 检查 node_modules 是否存在，如果不存在则安装依赖
-if [ ! -d "node_modules" ]; then
+# 检查依赖是否已安装（node_modules 可能存在但不完整）
+deps_missing() {
+    # 目录不存在：肯定缺依赖
+    if [ ! -d "node_modules" ]; then
+        return 0
+    fi
+    # 关键依赖/可执行文件缺失：依赖不完整
+    if [ ! -d "node_modules/express" ]; then
+        return 0
+    fi
+    if [ ! -d "node_modules/cors" ]; then
+        return 0
+    fi
+    if [ ! -f "node_modules/.bin/vite" ]; then
+        return 0
+    fi
+    return 1
+}
+
+if deps_missing; then
     echo "📦 安装项目依赖..."
-    npm install
+    if [ -f "package-lock.json" ]; then
+        npm ci
+    else
+        npm install
+    fi
     if [ $? -ne 0 ]; then
         echo "❌ 依赖安装失败"
         exit 1
@@ -109,7 +131,7 @@ echo "✅ 前端服务已启动 (PID: $FRONTEND_PID)"
 echo ""
 echo "🎉 所有服务已成功启动！"
 echo "=================================="
-echo "📱 前端地址: http://localhost:5173"
+echo "📱 前端地址: http://localhost:5173 (或 http://127.0.0.1:5173)"
 echo "🔧 后端地址: http://localhost:$API_PORT"
 echo "📋 日志文件: logs/frontend.log, logs/backend.log"
 echo ""

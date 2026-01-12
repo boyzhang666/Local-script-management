@@ -17,6 +17,9 @@ import {
   Layers,
 } from "lucide-react";
 import { motion } from "framer-motion";
+import { useCommandConfig } from "@/hooks/useCommandConfig";
+import { resolveCommand } from "@/utils/commandResolution";
+import LogsModal from "./LogsModal";
 
 const categoryConfig = {
   frontend: { label: "前端", color: "bg-blue-100 text-blue-700", icon: "🎨" },
@@ -26,6 +29,13 @@ const categoryConfig = {
   mobile: { label: "移动端", color: "bg-pink-100 text-pink-700", icon: "📱" },
   desktop: { label: "桌面应用", color: "bg-indigo-100 text-indigo-700", icon: "🖥️" },
   script: { label: "脚本", color: "bg-yellow-100 text-yellow-700", icon: "📜" },
+  shell: { label: "Shell 脚本", color: "bg-yellow-100 text-yellow-700", icon: "📜" },
+  python: { label: "Python 脚本", color: "bg-blue-100 text-blue-700", icon: "🐍" },
+  executable: { label: "可执行程序", color: "bg-indigo-100 text-indigo-700", icon: "🧩" },
+  app: { label: "应用程序", color: "bg-indigo-100 text-indigo-700", icon: "🖥️" },
+  exe: { label: "EXE 程序", color: "bg-indigo-100 text-indigo-700", icon: "🧩" },
+  bat: { label: "BAT 批处理", color: "bg-yellow-100 text-yellow-700", icon: "📜" },
+  powershell: { label: "PowerShell 脚本", color: "bg-blue-100 text-blue-700", icon: "🪟" },
   other: { label: "其他", color: "bg-gray-100 text-gray-700", icon: "📦" },
 };
 
@@ -58,8 +68,14 @@ export default function ProjectCard({
   onDelete,
   viewMode = "grid",
 }) {
+  const commandConfigQuery = useCommandConfig();
+  const platform = commandConfigQuery.data?.currentPlatform || null;
+  const config = commandConfigQuery.data?.config || null;
+  const resolvedStartCommand = resolveCommand(project.start_command, project.category, config, platform);
+
   const category = categoryConfig[project.category] || categoryConfig.other;
   const status = statusConfig[project.status] || statusConfig.stopped;
+  const [logsOpen, setLogsOpen] = React.useState(false);
 
   const formatDateTime = (iso) => {
     const d = new Date(iso);
@@ -148,6 +164,15 @@ export default function ProjectCard({
       <Button
         size="sm"
         variant="outline"
+        title="查看日志"
+        aria-label="查看日志"
+        onClick={() => setLogsOpen(true)}
+      >
+        <Terminal className="w-3 h-3" />
+      </Button>
+      <Button
+        size="sm"
+        variant="outline"
         onClick={() => onEdit(project)}
         title="编辑"
       >
@@ -162,6 +187,7 @@ export default function ProjectCard({
       >
         <Trash className="w-3 h-3" />
       </Button>
+      <LogsModal project={project} isOpen={logsOpen} onClose={setLogsOpen} />
     </>
   );
 
@@ -271,9 +297,9 @@ export default function ProjectCard({
                 <div className="flex-1 min-w-[160px] max-w-[260px] sm:max-w-[360px] md:max-w-[480px]">
                   <div
                     className="bg-gray-900 rounded px-3 py-1.5 text-xs font-mono text-green-400 truncate"
-                    title={project.start_command}
+                    title={resolvedStartCommand || project.start_command}
                   >
-                    $ {project.start_command}
+                    $ {resolvedStartCommand || project.start_command}
                   </div>
                 </div>
               </div>
@@ -378,7 +404,7 @@ export default function ProjectCard({
 
           {/* 命令预览 */}
           <div className="bg-gray-900 rounded-lg p-2 text-xs font-mono text-green-400 truncate">
-            $ {project.start_command}
+            $ {resolvedStartCommand || project.start_command}
           </div>
 
           {/* 操作按钮 */}

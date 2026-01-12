@@ -9,7 +9,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { X, Plus } from "lucide-react";
-import { getCommandConfig } from "@/api/commandConfig";
+import { useCommandConfig } from "@/hooks/useCommandConfig";
+import { getCommandTemplate, resolveCommand } from "@/utils/commandResolution";
 
 // 检测当前平台
 const detectPlatform = () => {
@@ -42,26 +43,17 @@ export default function ProjectForm({ project, existingGroups = [], onSave, onCa
   const [categories, setCategories] = useState(defaultCategories);
   const [currentPlatform, setCurrentPlatform] = useState(detectPlatform());
 
+  const commandConfigQuery = useCommandConfig();
+
   // 从后端加载命令配置
   useEffect(() => {
-    const loadConfig = async () => {
-      try {
-        const data = await getCommandConfig();
-        const platform = data.currentPlatform || detectPlatform();
-        setCurrentPlatform(platform);
-
-        if (data.config && data.config[platform]) {
-          const platformConfig = data.config[platform];
-          if (platformConfig.categories) {
-            setCategories(platformConfig.categories);
-          }
-        }
-      } catch {
-        // 加载失败时使用默认配置
-      }
-    };
-    loadConfig();
-  }, []);
+    const data = commandConfigQuery.data;
+    if (!data) return;
+    const platform = data.currentPlatform || detectPlatform();
+    setCurrentPlatform(platform);
+    const platformConfig = data.config?.[platform];
+    if (platformConfig?.categories) setCategories(platformConfig.categories);
+  }, [commandConfigQuery.data]);
 
   // 根据任务类型返回文件名占位符提示
   const getCommandPlaceholder = (category) => {
@@ -137,6 +129,10 @@ export default function ProjectForm({ project, existingGroups = [], onSave, onCa
     e.preventDefault();
     onSave(formData);
   };
+
+  const commandConfig = commandConfigQuery.data?.config || null;
+  const template = getCommandTemplate(commandConfig, currentPlatform, formData.category);
+  const resolvedStartCommand = resolveCommand(formData.start_command, formData.category, commandConfig, currentPlatform);
 
   return (
     <Card className="max-w-4xl mx-auto">
@@ -281,17 +277,33 @@ export default function ProjectForm({ project, existingGroups = [], onSave, onCa
                 </div>
 
                 <div>
-                  <Label htmlFor="start_command">
-                    {formData.category === 'shell' ? '脚本名称' : '文件名'}
-                  </Label>
+                  <Label htmlFor="start_command">启动命令 / 文件名</Label>
                   <Input
                     id="start_command"
                     value={formData.start_command}
                     onChange={(e) => handleChange('start_command', e.target.value)}
-                    placeholder={formData.category === 'shell' ? 'my_script.sh' : getCommandPlaceholder(formData.category)}
+                    placeholder={getCommandPlaceholder(formData.category)}
                     required
                     className="font-mono"
                   />
+                  <div className="mt-2 space-y-1">
+                    {!!template?.pattern && (
+                      <div className="text-xs text-gray-600">
+                        模板: <code className="bg-gray-100 px-1 py-0.5 rounded font-mono">{template.pattern}</code>
+                        {template.description ? (
+                          <span className="ml-2 text-gray-500">({template.description})</span>
+                        ) : null}
+                      </div>
+                    )}
+                    {!!resolvedStartCommand && resolvedStartCommand !== String(formData.start_command || '').trim() && (
+                      <div className="text-xs text-gray-600">
+                        预览: <code className="bg-gray-100 px-1 py-0.5 rounded font-mono">{resolvedStartCommand}</code>
+                      </div>
+                    )}
+                    <p className="text-xs text-gray-500">
+                      提示：你也可以直接输入完整命令（如以 <code className="bg-gray-100 px-1 py-0.5 rounded font-mono">bash/python3/node</code> 开头或包含 <code className="bg-gray-100 px-1 py-0.5 rounded font-mono">&&</code> 等），系统将不会再套用模板。
+                    </p>
+                  </div>
                 </div>
 
                 {/* Shell 脚本内容输入框 */}

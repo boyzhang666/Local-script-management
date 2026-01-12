@@ -6,6 +6,8 @@ import path from 'path'
 export default defineConfig({
   plugins: [react()],
   server: {
+    // Ensure dev server is reachable via both localhost and 127.0.0.1 on macOS (avoid IPv6-only bind to ::1)
+    host: '0.0.0.0',
     allowedHosts: true,
     proxy: {
       '/api': {

@@ -74,7 +74,7 @@
         "description": "使用 open -a 打开应用程序"
       },
       "python": {
-        "pattern": "conda run -n DA Python {cmd} ",
+        "pattern": "conda run -n dashboard Python {cmd} ",
         "description": "优先使用 python3 执行"
       },
       "other": {

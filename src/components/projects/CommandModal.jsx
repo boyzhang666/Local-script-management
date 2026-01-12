@@ -9,11 +9,18 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Copy, Check, Terminal } from "lucide-react";
+import { useCommandConfig } from "@/hooks/useCommandConfig";
+import { resolveCommand } from "@/utils/commandResolution";
 
 export default function CommandModal({ project, isOpen, onClose }) {
   const [copied, setCopied] = useState(false);
+  const commandConfigQuery = useCommandConfig();
 
   if (!project) return null;
+
+  const platform = commandConfigQuery.data?.currentPlatform || null;
+  const config = commandConfigQuery.data?.config || null;
+  const resolvedStartCommand = resolveCommand(project.start_command, project.category, config, platform);
 
   const generateFullCommand = () => {
     let command = "";
@@ -29,7 +36,7 @@ export default function CommandModal({ project, isOpen, onClose }) {
       command += `${envVars} `;
     }
     
-    command += project.start_command;
+    command += resolvedStartCommand || project.start_command;
     
     return command;
   };
@@ -108,7 +115,7 @@ export default function CommandModal({ project, isOpen, onClose }) {
                 <span className="font-semibold">
                   {(project.working_directory ? 1 : 0) + (Object.keys(project.environment_variables || {}).length > 0 ? 1 : 0) + 1}.
                 </span>
-                <span>执行启动命令: <code className="bg-gray-100 px-2 py-0.5 rounded">{project.start_command}</code></span>
+                <span>执行启动命令: <code className="bg-gray-100 px-2 py-0.5 rounded font-mono">{resolvedStartCommand || project.start_command}</code></span>
               </li>
             </ol>
           </div>

@@ -23,6 +23,7 @@ export async function startProject(project) {
       environment_variables: project.environment_variables,
       port: project.port,
       category: project.category,
+      script_content: project.script_content,
       startup_timeout_ms: 2000,
     }),
   });
@@ -85,6 +86,7 @@ export async function restartProject(project) {
         environment_variables: project.environment_variables,
         port: project.port,
         category: project.category,
+        script_content: project.script_content,
         startup_timeout_ms: 2000,
       }
     : null;
